@@ -157,21 +157,38 @@ class JellyfinClient @Inject constructor(
             item.toResult(conn)
         }
 
-    /** Album page for a `jellyfin:<albumId>` ref (the id without the prefix). */
+    // ponytail: 200 playlists, page when libraries outgrow it
+    suspend fun playlists(): Result<List<SearchResultItem>> =
+        items("Playlist", "MediaTypes" to "Audio", "SortBy" to "SortName", "Limit" to "200", "Fields" to "ChildCount") { item, conn ->
+            item.toResult(conn, ref = ID_PREFIX + PLAYLIST_REF + item.id)
+                .copy(subtitle = item.childCount?.let { "$it tracks" })
+        }
+
+    /** Album or playlist page for a `jellyfin:` ref (the id without the prefix; playlists start with [PLAYLIST_REF]). */
     suspend fun albumPage(ref: String, title: String, artist: String): Result<AlbumPageData> {
         val server = connection.first().serverUrl
-        return items("Audio", "ParentId" to ref, "SortBy" to "ParentIndexNumber,IndexNumber,SortName") { item, conn ->
-            item to item.toPlayableTrack(conn)
-        }.map { rows ->
+        val isPlaylist = ref.startsWith(PLAYLIST_REF)
+        val id = ref.removePrefix(PLAYLIST_REF)
+        // Playlist items come back in playlist order; the server doesn't filter out items you can't access, so keep Audio only.
+        val loaded = if (isPlaylist) {
+            items(null, path = "/Playlists/$id/Items") { item, conn -> item to item.toPlayableTrack(conn) }
+                .map { list -> list.filter { it.first.type == "Audio" } }
+        } else {
+            items("Audio", "ParentId" to id, "SortBy" to "ParentIndexNumber,IndexNumber,SortName") { item, conn ->
+                item to item.toPlayableTrack(conn)
+            }
+        }
+        return loaded.map { rows ->
             val head = rows.firstOrNull()
             AlbumPageData(
                 title = title,
-                artist = head?.first?.albumArtist ?: artist,
+                // A playlist has no single artist, so no chips render.
+                artist = if (isPlaylist) "" else head?.first?.albumArtist ?: artist,
                 browseId = ID_PREFIX + ref,
                 // empty album keeps a Jellyfin image URL so artwork never falls back to the name lookup
-                artworkUrl = head?.second?.artworkUrl ?: "$server/Items/$ref/Images/Primary?maxHeight=544",
-                artistBrowseId = head?.first?.albumArtists?.firstOrNull()?.id?.let { ID_PREFIX + it },
-                releaseYear = head?.first?.productionYear?.toString(),
+                artworkUrl = head?.second?.artworkUrl ?: "$server/Items/$id/Images/Primary?maxHeight=544",
+                artistBrowseId = if (isPlaylist) null else head?.first?.albumArtists?.firstOrNull()?.id?.let { ID_PREFIX + it },
+                releaseYear = if (isPlaylist) null else head?.first?.productionYear?.toString(),
                 trackCountText = "${rows.size} tracks",
                 tracks = rows.map { it.second },
             )

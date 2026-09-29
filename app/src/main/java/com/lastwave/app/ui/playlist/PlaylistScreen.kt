@@ -102,6 +102,7 @@ import com.lastwave.app.ui.common.TrackContextMenuSheet
 import com.lastwave.app.ui.common.TrackMenuCapabilities
 import com.lastwave.app.ui.common.TrackMenuTarget
 import com.lastwave.app.ui.common.adaptiveContentWidth
+import com.lastwave.app.ui.feed.ArtistAlbumNavBridgeFeed
 import com.lastwave.app.ui.shell.FloatingNavDefaults
 import com.lastwave.app.ui.theme.ExpressivePillShape
 import java.text.SimpleDateFormat
@@ -120,9 +121,15 @@ import java.util.Locale
 @Composable
 fun PlaylistScreen(
     onOpenPlaylist: (Long) -> Unit = {},
+    jellyfinMode: Boolean = false,
     viewModel: PlaylistViewModel = hiltViewModel(),
 ) {
+    val nav = hiltViewModel<ArtistAlbumNavBridgeFeed>().navigator
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    // YouTube-account playlists are hidden in Jellyfin mode.
+    val shown = if (jellyfinMode) state.playlists.filterNot { it.isYouTubeOnly } else state.playlists
+    // The ViewModel outlives a mode switch, so its Jellyfin list is ignored in YouTube mode.
+    val jfShown = if (jellyfinMode) state.jellyfinPlaylists else emptyList()
     val context = LocalContext.current
     val musicPlayer = com.lastwave.app.ui.player.LocalMusicPlayer.current
     val playbackState by musicPlayer.chromeState.collectAsStateWithLifecycle()
@@ -142,8 +149,9 @@ fun PlaylistScreen(
 
     // Re-reads from Room whenever this tab regains visibility — this is how
     // a playlist just saved by Generate shows up here without polling.
-    LifecycleResumeEffect(Unit) {
+    LifecycleResumeEffect(jellyfinMode) {
         viewModel.load()
+        if (jellyfinMode) viewModel.refreshJellyfin()
         onPauseOrDispose { }
     }
 
@@ -159,11 +167,11 @@ fun PlaylistScreen(
             var sortMenuExpanded by remember { mutableStateOf(false) }
             ExpressiveHeader(
                 title = "Playlist",
-                subtitle = if (state.playlists.any { it.isYouTubeOnly && it.remoteTrackCount == null }) {
-                    "${state.playlists.size} Playlists"
+                subtitle = (if (shown.any { it.isYouTubeOnly && it.remoteTrackCount == null }) {
+                    "${shown.size} Playlists"
                 } else {
-                    "${state.playlists.size} Playlists \u00b7 ${state.playlists.sumOf { it.remoteTrackCount ?: it.tracks.size }} Tracks"
-                },
+                    "${shown.size} Playlists \u00b7 ${shown.sumOf { it.remoteTrackCount ?: it.tracks.size }} Tracks"
+                }) + if (jellyfinMode) " \u00b7 ${jfShown.size} Jellyfin" else "",
                 actions = {
                     IconButton(
                         onClick = viewModel::openCreateDialog,
@@ -222,8 +230,8 @@ fun PlaylistScreen(
                     .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)),
             ) {
                 when {
-                    state.isLoading && state.playlists.isEmpty() && !state.isGenerating -> LoadingState()
-                    state.playlists.isEmpty() && !state.isGenerating -> EmptyState()
+                    state.isLoading && shown.isEmpty() && jfShown.isEmpty() && !state.isGenerating -> LoadingState()
+                    shown.isEmpty() && jfShown.isEmpty() && !state.isGenerating -> EmptyState()
                     else -> LazyColumn(
                         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = FloatingNavDefaults.contentBottomPadding()),
                         verticalArrangement = Arrangement.spacedBy(com.lastwave.app.ui.common.GroupGap),
@@ -256,18 +264,43 @@ fun PlaylistScreen(
                             }
                         }
 
+                        if (jfShown.isNotEmpty()) {
+                            item(key = "jf_header") {
+                                Text(
+                                    "Jellyfin",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    modifier = Modifier.padding(start = 4.dp, top = 4.dp),
+                                )
+                            }
+                            itemsIndexed(jfShown, key = { _, p -> "jf_${p.entityId}" }) { index, p ->
+                                com.lastwave.app.ui.common.ExpressiveGroupTrackRow(
+                                    title = p.name,
+                                    subtitle = p.subtitle ?: "Jellyfin playlist",
+                                    position = com.lastwave.app.ui.common.groupPositionFor(index, jfShown.size),
+                                    onClick = { nav.openAlbum(p.name, "", p.entityId) },
+                                    leading = {
+                                        ArtworkImage(
+                                            p.name, "", p.artworkUrl, Icons.AutoMirrored.Filled.QueueMusic,
+                                            Modifier.size(48.dp).clip(RoundedCornerShape(12.dp)),
+                                        )
+                                    },
+                                )
+                            }
+                        }
+
                         // Stable id-only keys: embedding the index makes every key
                         // change on pin/sort/insert, which combined with
                         // animateItem() crashes Lazy layout at the scroll edge
                         // ("key was already used" / anchor OOB). Ids are unique
                         // Room PKs so they are stable across reorder.
-                        itemsIndexed(state.playlists, key = { _, playlist -> playlist.id }) { index, playlist ->
+                        itemsIndexed(shown, key = { _, playlist -> playlist.id }) { index, playlist ->
                             val isNewest = playlist.id == state.newestId
                             Box(Modifier.animateItem()) {
                                 PlaylistCard(
                                     playlist = playlist,
                                     isNewest = isNewest,
-                                    position = com.lastwave.app.ui.common.groupPositionFor(index, state.playlists.size),
+                                    position = com.lastwave.app.ui.common.groupPositionFor(index, shown.size),
                                     isRegenerating = state.regeneratingId == playlist.id,
                                     currentTrack = playbackState.current,
                                     isPlaying = playbackState.isPlaying,

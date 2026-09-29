@@ -211,4 +211,45 @@ class JellyfinClientTest {
             .isEqualTo("jellyfin:art")
         assertThat(requested).contains("searchTerm=ac")
     }
+
+    @Test
+    fun playlists_mapToPlaylistRefsWithTrackCount() = runBlocking {
+        var requested = ""
+        val client = clientServing { url ->
+            requested = url
+            """{"Items":[{"Id":"pl1","Name":"Road trip","ChildCount":12,"Type":"Playlist","ImageTags":{"Primary":"p"}},
+              {"Id":"pl2","Name":"Empty","ImageTags":{}}]}"""
+        }
+
+        val (first, second) = client.playlists().getOrThrow()
+
+        assertThat(first.entityId).isEqualTo("jellyfin:playlist:pl1")
+        assertThat(first.name).isEqualTo("Road trip")
+        assertThat(first.subtitle).isEqualTo("12 tracks")
+        assertThat(first.artworkUrl).isEqualTo("https://jf.example/Items/pl1/Images/Primary?maxHeight=544&tag=p")
+        assertThat(second.subtitle).isNull()
+        assertThat(requested).contains("IncludeItemTypes=Playlist")
+        assertThat(requested).contains("MediaTypes=Audio")
+        assertThat(requested).contains("Fields=ChildCount")
+    }
+
+    @Test
+    fun albumPage_playlistRefKeepsServerOrderAndDropsNonAudio() = runBlocking {
+        var requested = ""
+        val client = clientServing { url ->
+            requested = url
+            """{"Items":[{"Id":"t2","Name":"Second","AlbumArtist":"X","Type":"Audio","ImageTags":{}},
+              {"Id":"v1","Name":"Video","Type":"Video","ImageTags":{}},
+              {"Id":"t1","Name":"First","AlbumArtist":"X","AlbumArtists":[{"Id":"art","Name":"X"}],"Type":"Audio","ImageTags":{}}]}"""
+        }
+
+        val page = client.albumPage("playlist:pl1", "Road trip", "").getOrThrow()
+
+        assertThat(requested).contains("/Playlists/pl1/Items")
+        assertThat(page.browseId).isEqualTo("jellyfin:playlist:pl1")
+        assertThat(page.tracks.map { it.playbackUrl }).containsExactly("jellyfin:t2", "jellyfin:t1").inOrder()
+        assertThat(page.trackCountText).isEqualTo("2 tracks")
+        assertThat(page.artist).isEmpty()
+        assertThat(page.artistBrowseId).isNull()
+    }
 }

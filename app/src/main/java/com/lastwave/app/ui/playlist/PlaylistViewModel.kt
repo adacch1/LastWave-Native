@@ -15,6 +15,7 @@ import com.lastwave.app.data.playlist.SavedPlaylist
 import com.lastwave.app.data.playlist.LIKED_SONGS_MODE
 import com.lastwave.app.data.playlist.isYouTubeOnly
 import com.lastwave.app.data.repository.AuthRepository
+import com.lastwave.app.data.search.SearchResultItem
 import com.lastwave.app.util.FileExportHelper
 import com.lastwave.app.util.PlaylistExportFormat
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -53,6 +54,7 @@ data class PlaylistUiState(
     val renamePlaylistId: Long? = null,
     val detailPlaylist: SavedPlaylist? = null,
     val isDetailLoading: Boolean = false,
+    val jellyfinPlaylists: List<SearchResultItem> = emptyList(),
 )
 
 /**
@@ -77,6 +79,7 @@ class PlaylistViewModel @Inject constructor(
     private val ytMusicSyncManager: com.lastwave.app.data.ytmusic.YtMusicSyncManager,
     private val ytMusicLibraryManager: com.lastwave.app.data.ytmusic.YtMusicLibraryManager,
     private val trackDownloadManager: com.lastwave.app.data.download.TrackDownloadManager,
+    private val jellyfin: JellyfinClient,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(PlaylistUiState())
@@ -195,6 +198,8 @@ class PlaylistViewModel @Inject constructor(
                     }
                 }
             }
+            // In Jellyfin mode, no YouTube Music requests.
+            if (jellyfin.mode.first()) return@launch
             try {
                 ytMusicLibraryManager.refresh()
             } catch (cancellation: CancellationException) {
@@ -204,6 +209,12 @@ class PlaylistViewModel @Inject constructor(
             }
             runCatching { ytMusicSyncManager.syncNow("playlist_open") }
         }
+    }
+
+    /** Fetches the Jellyfin playlists on resume. Kept out of [load], which runs on every debounced Room change.
+     *  A failure keeps the last list; Jellyfin Home surfaces connection errors. */
+    fun refreshJellyfin() = viewModelScope.launch {
+        jellyfin.playlists().onSuccess { list -> _uiState.update { it.copy(jellyfinPlaylists = list) } }
     }
 
     /** Loads a specific playlist by ID directly from Room for the detail screen. */

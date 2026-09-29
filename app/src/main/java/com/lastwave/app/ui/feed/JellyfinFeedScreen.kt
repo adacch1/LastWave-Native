@@ -11,6 +11,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.Album
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
@@ -25,6 +26,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
@@ -64,6 +66,7 @@ class JellyfinFeedViewModel @Inject constructor(
         val recent: List<SearchResultItem> = emptyList(),
         val albums: List<SearchResultItem> = emptyList(),
         val artists: List<SearchResultItem> = emptyList(),
+        val playlists: List<SearchResultItem> = emptyList(),
     )
 
     val state = MutableStateFlow(State())
@@ -91,6 +94,7 @@ class JellyfinFeedViewModel @Inject constructor(
                 async { jellyfin.albums("DateCreated", descending = true) },
                 async { jellyfin.albums("Random") },
                 async { jellyfin.artists() },
+                async { jellyfin.playlists() },
             ).awaitAll()
             loadedAtMs = System.currentTimeMillis()
             state.value = State(
@@ -98,6 +102,7 @@ class JellyfinFeedViewModel @Inject constructor(
                 recent = all[0].getOrDefault(emptyList()),
                 albums = all[1].getOrDefault(emptyList()),
                 artists = all[2].getOrDefault(emptyList()),
+                playlists = all[3].getOrDefault(emptyList()),
                 error = all.firstNotNullOfOrNull { r ->
                     r.exceptionOrNull()?.let { it.message ?: "Couldn't reach your Jellyfin server" }
                 },
@@ -118,7 +123,7 @@ fun JellyfinFeedScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
-    val hasContent = state.recent.isNotEmpty() || state.albums.isNotEmpty() || state.artists.isNotEmpty()
+    val hasContent = state.recent.isNotEmpty() || state.albums.isNotEmpty() || state.artists.isNotEmpty() || state.playlists.isNotEmpty()
 
     LifecycleStartEffect(Unit) {
         viewModel.refreshIfStale()
@@ -190,6 +195,11 @@ fun JellyfinFeedScreen(
                                 Shelf("Artists") { ArtistRow(state.artists, nav) }
                             }
                         }
+                        if (state.playlists.isNotEmpty()) {
+                            item(key = "playlists") {
+                                Shelf("Playlists") { AlbumRow(state.playlists, nav, Icons.AutoMirrored.Filled.QueueMusic) }
+                            }
+                        }
                     }
                 }
             }
@@ -219,14 +229,18 @@ private fun Shelf(title: String, content: @Composable () -> Unit) {
 }
 
 @Composable
-private fun AlbumRow(albums: List<SearchResultItem>, nav: ArtistAlbumNavigator) {
+private fun AlbumRow(
+    albums: List<SearchResultItem>,
+    nav: ArtistAlbumNavigator,
+    fallbackIcon: ImageVector = Icons.Filled.Album,
+) {
     FeedMediaRow {
         items(albums) { album ->
             FeedMediaCard(
                 title = album.name,
-                subtitle = album.artist.orEmpty(),
+                subtitle = album.artist ?: album.subtitle.orEmpty(),
                 artworkUrl = album.artworkUrl,
-                fallbackIcon = Icons.Filled.Album,
+                fallbackIcon = fallbackIcon,
                 onClick = { nav.openAlbum(album.name, album.artist.orEmpty(), album.entityId) },
             )
         }
