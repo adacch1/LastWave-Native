@@ -1183,7 +1183,7 @@ private fun QuickTilesGrid(
         contentPadding = PaddingValues(horizontal = 16.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        items(tiles, key = { it.playlistId ?: it.localPlaylistId?.toString() ?: it.collection ?: it.title }) { tile ->
+        items(tiles, key = { it.playlistId ?: it.localPlaylistId?.toString() ?: "${it.collection}:${it.title}" }) { tile ->
             QuickTileCard(
                 tile = tile,
                 onClick = { onTileClick(tile) },
