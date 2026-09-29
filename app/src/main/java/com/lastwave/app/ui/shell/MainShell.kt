@@ -99,6 +99,10 @@ import com.lastwave.app.ui.theme.liquidGlass
 import com.lastwave.app.ui.theme.rememberGlassInteraction
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import java.nio.IntBuffer
@@ -106,10 +110,15 @@ import kotlin.time.Duration.Companion.seconds
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewModelScope
+import com.lastwave.app.data.jellyfin.JellyfinClient
+import com.lastwave.app.ui.common.ConnectedButtonGroup
+import com.lastwave.app.ui.common.ConnectedButtonItem
 import com.lastwave.app.ui.common.ExpressiveMotion
 import com.lastwave.app.ui.common.PredictiveBackScreen
 import com.lastwave.app.ui.common.adaptiveContentWidth
 import com.lastwave.app.ui.feed.FeedScreen
+import com.lastwave.app.ui.feed.JellyfinFeedScreen
 import com.lastwave.app.ui.home.HomeScreen
 import com.lastwave.app.ui.player.LocalMiniPlayerScrollClearance
 import com.lastwave.app.ui.playlist.PlaylistScreen
@@ -139,8 +148,21 @@ import javax.inject.Inject
 @HiltViewModel
 class MainShellViewModel @Inject constructor(
     val appUpdateManager: com.lastwave.app.data.update.AppUpdateManager,
+    private val jellyfin: JellyfinClient,
 ) : ViewModel() {
     val updateInfo = appUpdateManager.updateInfo
+
+    // Both start null so the pager waits for real values: an initial false would
+    // compose FeedScreen (and start the YouTube load) for a frame, and the header
+    // would change height when the toggle appears.
+    val jellyfinConnected: StateFlow<Boolean?> = jellyfin.connection.map { it.isConnected }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+    val jellyfinMode: StateFlow<Boolean?> = jellyfin.mode
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    fun setJellyfinMode(on: Boolean) {
+        viewModelScope.launch { jellyfin.setMode(on) }
+    }
 
     fun dismissUpdate(version: String) {
         appUpdateManager.dismissUpdate(version)
@@ -149,6 +171,21 @@ class MainShellViewModel @Inject constructor(
     fun openUpdate(context: android.content.Context) {
         appUpdateManager.openUpdate(context)
     }
+}
+
+/** YouTube | Jellyfin switch for the Home header. Renders nothing until a
+ *  Jellyfin session exists. Shares [MainShell]'s [MainShellViewModel] instance. */
+@Composable
+fun StreamingSourceToggle(vm: MainShellViewModel = hiltViewModel()) {
+    val connected by vm.jellyfinConnected.collectAsStateWithLifecycle()
+    val mode by vm.jellyfinMode.collectAsStateWithLifecycle()
+    if (connected != true) return
+    ConnectedButtonGroup(
+        items = remember { listOf(ConnectedButtonItem("YouTube"), ConnectedButtonItem("Jellyfin")) },
+        selectedIndex = if (mode == true) 1 else 0,
+        onSelect = { vm.setJellyfinMode(it == 1) },
+        modifier = Modifier.padding(top = 8.dp),
+    )
 }
 
 private enum class MainTab(val labelRes: Int) {
@@ -216,6 +253,8 @@ fun MainShell(
         }
     }
     val updateInfo by mainShellViewModel.updateInfo.collectAsStateWithLifecycle()
+    val jfMode by mainShellViewModel.jellyfinMode.collectAsStateWithLifecycle()
+    val jfConnected by mainShellViewModel.jellyfinConnected.collectAsStateWithLifecycle()
     val showUpdateBanner = updateInfo.isUpdateAvailable && !updateInfo.isDismissed
     val backgroundColor = MaterialTheme.colorScheme.background
     // Unconditional remember keeps composition stable; usage gated below.
@@ -238,18 +277,25 @@ fun MainShell(
                 onBack = { scope.launch { pagerState.animateScrollToPage(feedIndex) } },
             ) {
                 when (tabs[page]) {
-                    MainTab.FEED -> FeedScreen(
-                        onOpenSettings = onOpenSettings,
-                        onOpenSearch = onOpenSearch,
-                        onOpenDiscover = onOpenDiscover,
-                        onOpenPlaylist = onOpenPlaylist,
-                        onOpenFeedPlaylist = onOpenFeedPlaylist,
-                        onOpenGenerator = onOpenGenerator,
-                        onOpenFriends = onOpenFriends,
-                        onOpenFriendProfile = onOpenFriendProfile,
-                        onOpenNewReleases = onOpenNewReleases,
-                        onOpenDownloads = onOpenDownloads,
-                    )
+                    MainTab.FEED -> when {
+                        jfMode == null || jfConnected == null -> Unit
+                        jfMode == true -> JellyfinFeedScreen(
+                            onOpenSettings = onOpenSettings,
+                            onOpenSearch = onOpenSearch,
+                        )
+                        else -> FeedScreen(
+                            onOpenSettings = onOpenSettings,
+                            onOpenSearch = onOpenSearch,
+                            onOpenDiscover = onOpenDiscover,
+                            onOpenPlaylist = onOpenPlaylist,
+                            onOpenFeedPlaylist = onOpenFeedPlaylist,
+                            onOpenGenerator = onOpenGenerator,
+                            onOpenFriends = onOpenFriends,
+                            onOpenFriendProfile = onOpenFriendProfile,
+                            onOpenNewReleases = onOpenNewReleases,
+                            onOpenDownloads = onOpenDownloads,
+                        )
+                    }
                     MainTab.STATS -> HomeScreen(
                         onOpenSettings = onOpenSettings,
                         onOpenSearch = onOpenSearch,

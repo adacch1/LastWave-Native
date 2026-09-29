@@ -74,12 +74,13 @@ class JellyfinPreferences @Inject constructor(
         return id
     }
 
-    suspend fun saveConnection(connection: JellyfinConnection) {
+    suspend fun saveConnection(connection: JellyfinConnection, mode: Boolean = false) {
         dataStore.edit { prefs ->
             prefs[SERVER_URL_KEY] = connection.serverUrl
             prefs[USER_ID_KEY] = connection.userId
             prefs[USER_NAME_KEY] = connection.userName
             prefs[ACCESS_TOKEN_KEY] = connection.accessToken
+            if (mode) prefs[MODE_KEY] = true
         }
     }
 

@@ -47,13 +47,13 @@ class JellyfinLoginViewModel @Inject constructor(
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
 
-    fun connect(serverUrl: String, username: String, password: String) {
+    fun connect(serverUrl: String, username: String, password: String, switchSource: Boolean = false) {
         if (_connecting.value) return
         _connecting.value = true
         _error.value = null
         viewModelScope.launch {
             try {
-                jellyfinClient.login(serverUrl, username, password).onFailure { error ->
+                jellyfinClient.login(serverUrl, username, password, switchSource).onFailure { error ->
                     if (error is CancellationException) throw error
                     android.util.Log.e("JellyfinLogin", "Jellyfin login failed", error)
                     _error.value = error.message ?: "Couldn't connect to Jellyfin"
@@ -79,6 +79,7 @@ class JellyfinLoginViewModel @Inject constructor(
 fun JellyfinLoginScreen(
     onBack: () -> Unit,
     onConnected: () -> Unit,
+    switchSource: Boolean = false,
     viewModel: JellyfinLoginViewModel = hiltViewModel(),
 ) {
     val connection by viewModel.connection.collectAsStateWithLifecycle()
@@ -112,7 +113,7 @@ fun JellyfinLoginScreen(
                     connection = connection,
                     connecting = connecting,
                     error = error,
-                    onConnect = viewModel::connect,
+                    onConnect = { server, user, pass -> viewModel.connect(server, user, pass, switchSource) },
                     onDisconnect = viewModel::disconnect,
                 )
             }

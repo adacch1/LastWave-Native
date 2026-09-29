@@ -436,6 +436,8 @@ fun LastWaveNavHost(
                 com.lastwave.app.ui.settings.JellyfinLoginScreen(
                     onBack = { navController.popBackStack() },
                     onConnected = { navController.popBackStack() },
+                    // Only the first-launch Login path switches to Jellyfin; Settings sign-in keeps the mode.
+                    switchSource = navController.previousBackStackEntry?.destination?.route == Screen.Login.route,
                 )
             }
         }

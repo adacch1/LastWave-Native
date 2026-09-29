@@ -100,6 +100,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.lastwave.app.data.feed.FeedAlbum
+import com.lastwave.app.data.jellyfin.JellyfinClient
 import com.lastwave.app.data.feed.FeedArtist
 import com.lastwave.app.data.feed.FeedQuickTile
 import com.lastwave.app.data.feed.FeedSpotlight
@@ -128,6 +129,7 @@ import com.lastwave.app.ui.navigation.ArtistAlbumNavigator
 import com.lastwave.app.ui.player.LocalMusicPlayer
 import com.lastwave.app.ui.player.PlayingWaveBars
 import com.lastwave.app.ui.shell.FloatingNavDefaults
+import com.lastwave.app.ui.shell.StreamingSourceToggle
 
 
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
@@ -209,6 +211,7 @@ fun FeedScreen(
                     HeaderActionIcon(Icons.Filled.Search, "Search", onOpenSearch)
                     HeaderActionIcon(Icons.Filled.Settings, "Settings", onOpenSettings)
                 },
+                content = { StreamingSourceToggle() },
             )
 
             PullToRefreshBox(
@@ -1059,7 +1062,7 @@ private fun TasteStrip(
 }
 
 @Composable
-private fun FeedLoadingSkeleton() {
+internal fun FeedLoadingSkeleton() {
     val transition = rememberInfiniteTransition(label = "feedSkeleton")
     val pulse by transition.animateFloat(
         initialValue = 0.45f,
@@ -1424,7 +1427,7 @@ private fun QuickPicksRows(
 }
 
 @Composable
-private fun FeedMediaRow(
+internal fun FeedMediaRow(
     content: LazyListScope.() -> Unit,
 ) {
     LazyRow(
@@ -1437,7 +1440,7 @@ private fun FeedMediaRow(
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun FeedMediaCard(
+internal fun FeedMediaCard(
     title: String,
     subtitle: String,
     artworkUrl: String?,
@@ -1935,13 +1938,15 @@ private fun SpotlightHeroCard(
 }
 
 @Composable
-private fun ArtistAvatarCard(
+internal fun ArtistAvatarCard(
     artist: FeedArtist,
     onClick: () -> Unit,
     isTop: Boolean = false,
 ) {
     val haptics = LocalHapticFeedback.current
-    val primaryArtistName = remember(artist.name) { ArtistHelper.primaryArtist(artist.name) }
+    val primaryArtistName = remember(artist.name, artist.browseId) {
+        if (JellyfinClient.itemIdOf(artist.browseId) != null) artist.name else ArtistHelper.primaryArtist(artist.name)
+    }
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier
@@ -2075,7 +2080,7 @@ private fun FriendAvatarCard(
 }
 
 @Composable
-private fun FeedSectionHeader(
+internal fun FeedSectionHeader(
     title: String,
     subtitle: String? = null,
     actionText: String? = null,
@@ -2184,7 +2189,7 @@ private fun FeedSectionHeader(
 }
 
 @Composable
-private fun FeedEmptyState(
+internal fun FeedEmptyState(
     message: String,
     onRetry: () -> Unit,
     onOpenSearch: () -> Unit,

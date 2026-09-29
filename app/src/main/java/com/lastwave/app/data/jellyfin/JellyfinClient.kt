@@ -42,8 +42,14 @@ class JellyfinClient @Inject constructor(
 
     suspend fun setMode(on: Boolean) = preferences.setMode(on)
 
-    /** Signs in and stores the session. The password is never persisted. */
-    suspend fun login(rawServerUrl: String, username: String, password: String): Result<JellyfinConnection> =
+    /** Signs in and stores the session. The password is never persisted.
+     *  [switchSource] also turns Jellyfin mode on in the same DataStore edit. */
+    suspend fun login(
+        rawServerUrl: String,
+        username: String,
+        password: String,
+        switchSource: Boolean = false,
+    ): Result<JellyfinConnection> =
         withContext(Dispatchers.IO) {
             runCatching {
                 val server = normalizeServerUrl(rawServerUrl)
@@ -61,7 +67,7 @@ class JellyfinClient @Inject constructor(
                     userId = auth.user.id,
                     userName = auth.user.name,
                     accessToken = auth.accessToken,
-                ).also { preferences.saveConnection(it) }
+                ).also { preferences.saveConnection(it, mode = switchSource) }
             }
         }
 
