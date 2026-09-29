@@ -46,6 +46,7 @@ fun ArtworkImage(
     fallbackIcon: ImageVector,
     modifier: Modifier = Modifier,
     decodeSizePx: Int? = null,
+    alignment: Alignment = Alignment.Center,
     artworkViewModel: ArtworkViewModel = hiltViewModel(),
 ) {
     val context = LocalContext.current
@@ -55,11 +56,12 @@ fun ArtworkImage(
             if (decodeSizePx == null) embeddedUrl
             else ImageRequest.Builder(context).data(embeddedUrl).size(decodeSizePx).build()
         }
-        Box(modifier = modifier, contentAlignment = Alignment.Center) {
+        Box(modifier = modifier, contentAlignment = alignment) {
             AsyncImage(
                 model = model,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
+                alignment = alignment,
                 modifier = Modifier.fillMaxSize(),
                 onError = { embeddedFailed = true },
             )
@@ -99,7 +101,7 @@ fun ArtworkImage(
         }
     }
 
-    Box(modifier = modifier, contentAlignment = Alignment.Center) {
+    Box(modifier = modifier, contentAlignment = alignment) {
         when {
             !resolvedUrl.isNullOrBlank() && !resolvedFailed -> {
                 val model = remember(resolvedUrl, decodeSizePx, context) {
@@ -110,6 +112,7 @@ fun ArtworkImage(
                     model = model,
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
+                    alignment = alignment,
                     modifier = Modifier.fillMaxSize(),
                     onError = {
                         resolvedFailed = true

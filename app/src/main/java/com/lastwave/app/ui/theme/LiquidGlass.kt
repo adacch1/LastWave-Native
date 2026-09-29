@@ -443,7 +443,7 @@ fun rememberGlassInteraction(): GlassInteraction {
 fun Modifier.drawInteractiveGlass(
     isDark: Boolean,
     backdrop: Backdrop,
-    layer: GraphicsLayer,
+    layer: GraphicsLayer? = null,
     luminanceAnimation: Float,
     shape: Shape,
     interaction: GlassInteraction?,
@@ -480,7 +480,6 @@ fun Modifier.drawInteractiveGlass(
             },
             onDrawBackdrop = { drawBackdrop ->
                 drawBackdrop()
-                layer.record { drawBackdrop() }
             },
             onDrawSurface = {
                 val darken = lerp(minScrim, maxScrim, ((luminanceAnimation - 0.3f) / 0.5f).coerceIn(0f, 1f))

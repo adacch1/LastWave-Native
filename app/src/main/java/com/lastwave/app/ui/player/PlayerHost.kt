@@ -1882,9 +1882,9 @@ private fun FullPlayer(
                 )
                 if (showFullBleed) {
                     val heroHeight = if (heroBottomPx > 0f) {
-                        with(LocalDensity.current) { heroBottomPx.toDp() }
+                        with(LocalDensity.current) { (heroBottomPx + 8.dp.toPx()).toDp() }
                     } else {
-                        with(LocalDensity.current) { (bgHeight * 0.54f).toDp() }
+                        with(LocalDensity.current) { (bgHeight * 0.58f).toDp() }
                     }
                     val lyricsCanvasBlurDp by animateDpAsState(
                         targetValue = if (currentTab == FullPlayerTab.LYRICS) 32.dp else 0.dp,
@@ -1901,6 +1901,23 @@ private fun FullPlayer(
                             .align(Alignment.TopStart)
                             .fillMaxWidth()
                             .height(heroHeight)
+                            .graphicsLayer {
+                                compositingStrategy = CompositingStrategy.Offscreen
+                            }
+                            .drawWithContent {
+                                drawContent()
+                                drawRect(
+                                    brush = Brush.verticalGradient(
+                                        0.00f to Color.Black,
+                                        0.58f to Color.Black,
+                                        0.72f to Color.Black.copy(alpha = 0.82f),
+                                        0.84f to Color.Black.copy(alpha = 0.48f),
+                                        0.94f to Color.Black.copy(alpha = 0.12f),
+                                        1.00f to Color.Transparent,
+                                    ),
+                                    blendMode = BlendMode.DstIn,
+                                )
+                            }
                             .then(
                                 if (lyricsCanvasBlurDp > 0.dp) {
                                     Modifier.blur(lyricsCanvasBlurDp)
@@ -1914,17 +1931,19 @@ private fun FullPlayer(
                             artist = track.artist,
                             embeddedUrl = track.artworkUrl,
                             fallbackIcon = Icons.Filled.MusicNote,
+                            alignment = Alignment.TopCenter,
                             modifier = Modifier.fillMaxSize(),
                         )
+                        // Top status bar vignette only (ensures system indicators remain legible over bright artwork)
                         Box(
                             modifier = Modifier
-                                .fillMaxSize()
+                                .fillMaxWidth()
+                                .height(110.dp)
                                 .background(
                                     Brush.verticalGradient(
-                                        0.00f to Color.Transparent,
-                                        0.50f to Color.Transparent,
-                                        0.78f to Color.Black.copy(alpha = 0.45f),
-                                        1.00f to Color.Black.copy(alpha = 0.90f),
+                                        0.00f to Color.Black.copy(alpha = 0.35f),
+                                        0.60f to Color.Black.copy(alpha = 0.12f),
+                                        1.00f to Color.Transparent,
                                     )
                                 )
                         )

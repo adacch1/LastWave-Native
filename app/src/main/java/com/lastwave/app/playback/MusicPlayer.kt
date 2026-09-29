@@ -77,7 +77,6 @@ import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
@@ -934,8 +933,8 @@ class MusicPlayer @Inject constructor(
             .setBufferDurationsMs(
                 /* minBufferMs = */ if (handleAudioFocus) 45_000 else 15_000,
                 /* maxBufferMs = */ if (handleAudioFocus) 120_000 else 30_000,
-                /* bufferForPlaybackMs = */ 500,
-                /* bufferForPlaybackAfterRebufferMs = */ 1_000,
+                /* bufferForPlaybackMs = */ 1_500,
+                /* bufferForPlaybackAfterRebufferMs = */ 2_500,
             )
             .setPrioritizeTimeOverSizeThresholds(true)
             .setBackBuffer(15_000, true)
@@ -3745,8 +3744,8 @@ class MusicPlayer @Inject constructor(
                 val previousCount = player.mediaItemCount
                 player.addMediaItems(fresh.map(PlayableTrack::toMediaItem))
                 refresh(player)
-                val isPlayerStoppedAtEnd = player.playbackState == Player.STATE_ENDED ||
-                    (!player.isPlaying && player.currentMediaItemIndex >= previousCount - 1)
+                val isPlayerStoppedAtEnd = player.playbackState == Player.STATE_ENDED &&
+                    player.currentMediaItemIndex >= previousCount - 1
                 if (isPlayerStoppedAtEnd) {
                     val nextToPlay = previousCount.coerceIn(0, player.mediaItemCount - 1)
                     resolveAndPlayQueueItem(nextToPlay)
@@ -4103,8 +4102,8 @@ class MusicPlayer @Inject constructor(
                         _state.update { it.copy(isEndlessQueue = true) }
                         enrichUpcomingQueue(player.currentMediaItemIndex)
 
-                        val isPlayerStoppedAtEnd = player.playbackState == Player.STATE_ENDED ||
-                            (!player.isPlaying && player.currentMediaItemIndex >= previousCount - 1)
+                        val isPlayerStoppedAtEnd = player.playbackState == Player.STATE_ENDED &&
+                            player.currentMediaItemIndex >= previousCount - 1
                         if (isPlayerStoppedAtEnd || resumePlaybackImmediately) {
                             val nextToPlay = previousCount.coerceIn(0, player.mediaItemCount - 1)
                             android.util.Log.i("MusicPlayer", "Queue expired/started: auto-resuming endless playback at index $nextToPlay")
@@ -4184,8 +4183,8 @@ class MusicPlayer @Inject constructor(
                         _state.update { it.copy(isEndlessQueue = true) }
                         enrichUpcomingQueue(currentIndex)
 
-                        val isPlayerStoppedAtEnd = player.playbackState == Player.STATE_ENDED ||
-                            (!player.isPlaying && player.currentMediaItemIndex >= previousCount - 1)
+                        val isPlayerStoppedAtEnd = player.playbackState == Player.STATE_ENDED &&
+                            player.currentMediaItemIndex >= previousCount - 1
                         if (isPlayerStoppedAtEnd) {
                             val nextToPlay = previousCount.coerceIn(0, player.mediaItemCount - 1)
                             android.util.Log.i("MusicPlayer", "End of queue reached: auto-resuming infinite playback at index $nextToPlay")
@@ -5029,99 +5028,52 @@ class MusicPlayer @Inject constructor(
             }
         }
 
-        // Both YouTube and Lossless are active: race them to play whichever finishes first!
-        val resultChannel = Channel<Pair<ResolvedStream?, Boolean>>(capacity = 2)
-        val ytWatcher = applicationScope.launch(Dispatchers.IO) {
-            try {
-                val stream = youtubeDeferred.await()
-                resultChannel.trySend(stream to false)
-            } catch (_: CancellationException) {
-            } catch (_: Throwable) {
-                resultChannel.trySend(null to false)
-            }
-        }
-        val losslessWatcher = applicationScope.launch(Dispatchers.IO) {
-            try {
-                val stream = losslessDeferred.await()
-                resultChannel.trySend(stream to true)
-            } catch (_: CancellationException) {
-            } catch (_: Throwable) {
-                resultChannel.trySend(null to true)
-            }
-        }
-
         return try {
             val localStream = localDeferred.await()
             if (localStream != null) {
                 android.util.Log.i("MusicPlayer", "[PLAYBACK] local-download hit for '${track.title}' key=${localStream.cacheKey}")
                 localStream
             } else {
-                var chosenStream: ResolvedStream? = null
-                withTimeoutOrNull(YT_RESOLVE_TOTAL_TIMEOUT_MS) {
-                    val first = resultChannel.receive()
-                    if (first.first != null) {
-                        val (stream, isLossless) = first
-                        if (!isLossless) {
-                            // If lossless completed at almost the exact same instant, prefer lossless directly
-                            val instantLossless = if (losslessDeferred.isCompleted) {
-                                runCatching { losslessDeferred.await() }.getOrNull()
-                            } else null
-
-                            if (instantLossless != null) {
-                                youtubeDeferred.cancel()
-                                android.util.Log.i(
-                                    "MusicPlayer",
-                                    "[PLAYBACK] Lossless stream ready alongside YouTube for '${track.title}' (${SystemClock.elapsedRealtime() - forkStart}ms); playing lossless directly",
-                                )
-                                chosenStream = instantLossless
-                            } else {
-                                // YouTube arrived first: play immediately and hand lossless to background upgrade
-                                activeUpgradeDeferred?.cancel()
-                                activeUpgradeDeferred = losslessDeferred
-                                android.util.Log.i(
-                                    "MusicPlayer",
-                                    "[PLAYBACK] YouTube stream ready first for '${track.title}' (${SystemClock.elapsedRealtime() - forkStart}ms); playing immediately and searching lossless in background",
-                                )
-                                chosenStream = stream
-                            }
-                        } else {
-                            // Lossless finished first: play lossless directly
-                            youtubeDeferred.cancel()
-                            android.util.Log.i(
-                                "MusicPlayer",
-                                "[PLAYBACK] Lossless stream ready first for '${track.title}' (${SystemClock.elapsedRealtime() - forkStart}ms); playing lossless directly",
-                            )
-                            chosenStream = stream
-                        }
-                    } else {
-                        // First to complete yielded null/failure; await the second candidate
-                        val second = resultChannel.receive()
-                        if (second.first != null) {
-                            val (stream, isLossless) = second
-                            if (isLossless) {
-                                youtubeDeferred.cancel()
-                                android.util.Log.i(
-                                    "MusicPlayer",
-                                    "[PLAYBACK] Lossless stream resolved second for '${track.title}' (${SystemClock.elapsedRealtime() - forkStart}ms); playing lossless",
-                                )
-                            } else {
-                                android.util.Log.i(
-                                    "MusicPlayer",
-                                    "[PLAYBACK] YouTube stream resolved second for '${track.title}' (${SystemClock.elapsedRealtime() - forkStart}ms); playing YouTube",
-                                )
-                            }
-                            chosenStream = stream
-                        }
+                val isDolbyPreferred = misc.dolbyAtmosEnabled || misc.losslessQuality == LosslessMusicApi.QUALITY_DOLBY_ATMOS
+                val losslessTimeoutMs = if (isDolbyPreferred) {
+                    if (!videoId.isNullOrBlank()) 10_000L else 12_000L
+                } else {
+                    if (!videoId.isNullOrBlank()) 3_500L else 4_500L
+                }
+                val losslessBudgetMs = (losslessTimeoutMs - (SystemClock.elapsedRealtime() - forkStart)).coerceAtLeast(0L)
+                val losslessStream: ResolvedStream? = if (losslessDeferred.isCompleted) {
+                    runCatching { losslessDeferred.await() }.getOrNull()
+                } else if (losslessBudgetMs <= 0L) {
+                    null
+                } else {
+                    withTimeoutOrNull(losslessBudgetMs) {
+                        runCatching { losslessDeferred.await() }.getOrNull()
                     }
                 }
 
-                chosenStream
-                    ?: runCatching { resolveYoutubeTrackAudioStream(track, videoId) }.getOrNull()
-                    ?: resolveYoutubeTrackAudioStream(track, null)
+                if (losslessStream != null) {
+                    youtubeDeferred.cancel()
+                    android.util.Log.i(
+                        "MusicPlayer",
+                        "[PLAYBACK] Lossless stream resolved for '${track.title}' (${SystemClock.elapsedRealtime() - forkStart}ms); locking playback pipeline to ${losslessStream.audioCodec}",
+                    )
+                    losslessStream
+                } else {
+                    if (!losslessDeferred.isCompleted) {
+                        activeUpgradeDeferred?.cancel()
+                        activeUpgradeDeferred = losslessDeferred
+                    }
+                    val ytStream = youtubeDeferred.await()
+                        ?: runCatching { resolveYoutubeTrackAudioStream(track, videoId) }.getOrNull()
+                        ?: resolveYoutubeTrackAudioStream(track, null)
+                    android.util.Log.i(
+                        "MusicPlayer",
+                        "[PLAYBACK] YouTube stream resolved for '${track.title}' (${SystemClock.elapsedRealtime() - forkStart}ms); locking playback pipeline to ${ytStream.audioCodec}",
+                    )
+                    ytStream
+                }
             }
         } finally {
-            ytWatcher.cancel()
-            losslessWatcher.cancel()
             localDeferred.cancel()
             youtubeDeferred.cancel()
             if (activeUpgradeDeferred !== losslessDeferred) {
@@ -5146,7 +5098,14 @@ class MusicPlayer @Inject constructor(
                     "Dolby Atmos enabled in settings, but device lacks spatial/Dolby decoding capabilities; falling back to lossless stereo tier",
                 )
             }
-            misc.losslessQuality
+            // If the user's lossless quality is also set to Atmos but the
+            // device can't play it, demote to hi-res stereo so the addon
+            // waterfall skips the spatial tier entirely.
+            if (!atmosSupported && misc.losslessQuality == LosslessMusicApi.QUALITY_DOLBY_ATMOS) {
+                LosslessMusicApi.QUALITY_MAX_HI_RES
+            } else {
+                misc.losslessQuality
+            }
         }
         val stream = losslessMusicApi.resolveStream(
             title = track.title,
@@ -5204,19 +5163,57 @@ class MusicPlayer @Inject constructor(
         }
         // Device-capability veto: a spatial manifest that slips through on a
         // device that cannot render Atmos (no spatializer, no JOC decoder)
-        // is unplayable by construction. Refuse it HERE so the resolve
-        // cascade falls to stereo hi-res / CD lossless / YouTube Opus
-        // instead of handing poison to ExoPlayer (3003 → retry loop →
-        // "Playback interrupted" on a track that could have played).
+        // is unplayable by construction. Re-request from the addon with a
+        // stereo quality tier so the waterfall tries hi-res → CD → lossless
+        // before we give up and fall to YouTube.
         val spatialResult = manifestCodecBadge == "DOLBY ATMOS" ||
             manifestCodecBadge == "SPATIAL AUDIO" ||
             stream.audioCodecOverride == "DOLBY ATMOS"
         if (spatialResult && !atmosSupported) {
             android.util.Log.w(
                 "MusicPlayer",
-                "[LOSSLESS] veto: spatial manifest for '${track.title}' on incapable device; cascading down",
+                "[LOSSLESS] veto: spatial manifest for '${track.title}' on incapable device; re-requesting stereo tier",
             )
-            return null
+            // Re-request with hi-res stereo quality so the addon waterfall
+            // tries hi_res → lossless → high instead of skipping to YouTube.
+            val stereoQuality = if (effectiveQuality == LosslessMusicApi.QUALITY_DOLBY_ATMOS) {
+                LosslessMusicApi.QUALITY_MAX_HI_RES
+            } else {
+                effectiveQuality
+            }
+            val stereoStream = losslessMusicApi.resolveStream(
+                title = track.title,
+                artist = track.artist,
+                expectedDurationSeconds = expectedDurationSeconds,
+                expectedAlbum = track.album,
+                preferredQuality = stereoQuality,
+                excludedUrls = excludedLosslessUrls,
+            )
+            if (stereoStream == null) {
+                android.util.Log.w("MusicPlayer", "[LOSSLESS] stereo fallback also returned null for '${track.title}'")
+                return null
+            }
+            // Verify the stereo fallback isn't spatial too
+            val stereoManifestCodec = LosslessMusicApi.manifestCodecOf(stereoStream.url)?.lowercase()
+            val stereoIsSpatial = stereoManifestCodec?.let {
+                it.contains("ec-3") || it.contains("eac3") || it.contains("ac-3") ||
+                    it.contains("mha1") || it.contains("mhm1")
+            } == true || stereoStream.audioCodecOverride == "DOLBY ATMOS"
+            if (stereoIsSpatial) {
+                android.util.Log.w("MusicPlayer", "[LOSSLESS] stereo fallback still spatial for '${track.title}'; giving up")
+                return null
+            }
+            // Use the stereo stream instead — re-derive badge and metadata
+            // from the new stream by recursing with the stereo quality.
+            // (We can't just drop through because badge/playUrl were computed
+            // from the original spatial stream.)
+            android.util.Log.i("MusicPlayer", "[LOSSLESS] stereo fallback succeeded for '${track.title}'")
+            return resolveLosslessTrackAudioStream(
+                track = track,
+                misc = misc.copy(dolbyAtmosEnabled = false, losslessQuality = stereoQuality),
+                excludedLosslessUrls = excludedLosslessUrls,
+                expectedDurationSeconds = expectedDurationSeconds,
+            )
         }
 
         val playUrl: String
@@ -5499,53 +5496,23 @@ class MusicPlayer @Inject constructor(
                 currentCoroutineContext().ensureActive()
                 if (generation != playRequestGeneration.get()) return@launch
 
-                withContext(Dispatchers.Main.immediate) {
-                    if (generation != playRequestGeneration.get()) return@withContext
-                    if (!playerDelegate.isInitialized()) return@withContext
-                    val currentIndex = player.currentMediaItemIndex
-                    if (currentIndex !in 0 until player.mediaItemCount) return@withContext
-                    val currentItem = player.getMediaItemAt(currentIndex)
-                    if (currentItem.mediaId != expectedMediaId && currentItem.mediaId != track.mediaIdKey()) return@withContext
-
-                    val dur = player.duration
-                    val currentPos = player.currentPosition
-                    if (dur > 0L && currentPos > dur - 8_000L) {
-                        android.util.Log.d("MusicPlayer", "[STREAM UPGRADE] Near end of track (${currentPos}/${dur}ms), omitting swap")
-                        return@withContext
-                    }
-
-                    val playWhenReady = player.playWhenReady
-                    val knownDur = player.duration.takeIf { it > 0L }
-                        ?: _state.value.durationMs.takeIf { it > 0L }
-                        ?: track.durationMs
-                        ?: upgraded.durationMs
-                        ?: findKnownDuration(track)
-                    knownDur?.let { d ->
-                        rememberKnownDuration(upgraded.cacheKey, d)
-                        rememberKnownDuration(track.mediaIdKey(), d)
-                        rememberTrackDuration(track, d)
-                    }
-
-                    registerPreparedStream(upgraded)
-                    publishResolvedQuality(upgraded)
-                    applyDacRoutingFor(dacRateFor(upgraded))
-                    cacheCurrentTrackStream(upgraded)
-                    logStreamEvent("stream-upgrade", upgraded, retry = 0)
-
-                    val updatedMediaItem = track.toMediaItem(upgraded)
-                    replaceMediaItemPreservingShuffle(currentIndex, updatedMediaItem)
-                    lastSeekTargetMs = currentPos
-                    lastSeekAtElapsedMs = SystemClock.elapsedRealtime()
-                    player.seekTo(currentIndex, currentPos)
-                    player.prepare()
-                    if (playWhenReady) {
-                        player.play()
-                    }
-                    android.util.Log.i(
-                        "MusicPlayer",
-                        "[STREAM UPGRADE] Seamlessly upgraded '${track.title}' to ${upgraded.audioCodec} (${upgraded.bitrateKbps}kbps, ${upgraded.samplingRateKHz}kHz) at ${currentPos}ms",
-                    )
+                // Lock the playback pipeline to the source track's format throughout this session.
+                // Upgrades are registered and cached for future playback without interrupting active playback.
+                val knownDur = upgraded.durationMs
+                    ?: track.durationMs
+                    ?: findKnownDuration(track)
+                knownDur?.let { d ->
+                    rememberKnownDuration(upgraded.cacheKey, d)
+                    rememberKnownDuration(track.mediaIdKey(), d)
+                    rememberTrackDuration(track, d)
                 }
+                registerPreparedStream(upgraded)
+                cacheCurrentTrackStream(upgraded)
+                logStreamEvent("stream-upgrade-cached", upgraded, retry = 0)
+                android.util.Log.i(
+                    "MusicPlayer",
+                    "[STREAM UPGRADE] Cached upgraded stream for '${track.title}' (${upgraded.audioCodec}) for future playback without interrupting active session",
+                )
             } catch (_: CancellationException) {
             } catch (e: Throwable) {
                 android.util.Log.w("MusicPlayer", "[STREAM UPGRADE] Exception upgrading '${track.title}': ${e.message}")
@@ -5794,7 +5761,10 @@ class MusicPlayer @Inject constructor(
             error.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT ||
             error.errorCode == PlaybackException.ERROR_CODE_IO_INVALID_HTTP_CONTENT_TYPE ||
             error.errorCode == PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS ||
-            error.errorCode == PlaybackException.ERROR_CODE_IO_UNSPECIFIED
+            error.errorCode == PlaybackException.ERROR_CODE_IO_UNSPECIFIED ||
+            error.errorCode == PlaybackException.ERROR_CODE_IO_READ_POSITION_OUT_OF_RANGE ||
+            error.errorCode == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW ||
+            error.errorCode == PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED
     }
 
     /**
