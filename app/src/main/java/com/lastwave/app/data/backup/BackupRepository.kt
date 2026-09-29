@@ -119,7 +119,12 @@ class BackupRepository @Inject constructor(
         return BackupCheck.Valid(backup.playlists.size)
     }
 
-    suspend fun buildBackup(appVersionName: String): String = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+    /** [includeJellyfin] is true only for the in-memory rollback snapshot. Exports leave the
+     *  Jellyfin token and per-install device id out. */
+    suspend fun buildBackup(
+        appVersionName: String,
+        includeJellyfin: Boolean = false,
+    ): String = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
         val prefs = dataStore.data.first()
         val strings = mutableMapOf<String, String>()
         val booleans = mutableMapOf<String, Boolean>()
@@ -128,6 +133,7 @@ class BackupRepository @Inject constructor(
         val stringSets = mutableMapOf<String, Set<String>>()
         for (entry in prefs.asMap()) {
             val key = entry.key.name
+            if (!includeJellyfin && key in JELLYFIN_PREFERENCE_NAMES) continue
             when (val value = entry.value) {
                 is String -> strings[key] = value
                 is Boolean -> booleans[key] = value
@@ -201,14 +207,21 @@ class BackupRepository @Inject constructor(
             emptyMap()
         }
 
-        val previousPrefsSnapshot = try { buildBackup("rollback") } catch (e: Exception) { null }
+        // Every restore keeps the current Jellyfin sign-in, whatever the flag says.
+        val jellyfinStrings = JELLYFIN_PREFERENCE_NAMES.mapNotNull { name ->
+            currentPrefs.readSafely(stringPreferencesKey(name))?.let { value -> name to value }
+        }
+
+        val previousPrefsSnapshot = try { buildBackup("rollback", includeJellyfin = true) } catch (e: Exception) { null }
         val previousPlaylists = try { playlistDao.getAll() } catch (e: Exception) { emptyList() }
         val previousExclusions = try { recommendationExclusionDao.getAll() } catch (e: Exception) { emptyList() }
 
         return try {
             dataStore.edit { mutablePrefs ->
                 mutablePrefs.clear()
-                backup.prefs.strings.forEach { (k, v) -> mutablePrefs[stringPreferencesKey(k)] = v }
+                backup.prefs.strings.forEach { (k, v) ->
+                    if (k !in JELLYFIN_PREFERENCE_NAMES) mutablePrefs[stringPreferencesKey(k)] = v
+                }
                 backup.prefs.booleans.forEach { (k, v) -> mutablePrefs[booleanPreferencesKey(k)] = v }
                 backup.prefs.integers.forEach { (k, v) ->
                     // Repair v7-and-older backups that wrote Long preferences
@@ -221,6 +234,7 @@ class BackupRepository @Inject constructor(
                 }
                 backup.prefs.longs.forEach { (k, v) -> mutablePrefs[longPreferencesKey(k)] = v }
                 backup.prefs.stringSets.forEach { (k, v) -> mutablePrefs[stringSetPreferencesKey(k)] = v }
+                jellyfinStrings.forEach { (name, value) -> mutablePrefs[stringPreferencesKey(name)] = value }
                 if (preserveSignedInSession) {
                     preservedAuthStrings.forEach { (name, value) ->
                         mutablePrefs[stringPreferencesKey(name)] = value
@@ -294,6 +308,13 @@ class BackupRepository @Inject constructor(
             "lw_apisecret",
             "lw_sessionkey",
             "lw_username",
+        )
+        val JELLYFIN_PREFERENCE_NAMES = listOf(
+            "jellyfin_server_url",
+            "jellyfin_user_id",
+            "jellyfin_user_name",
+            "jellyfin_access_token",
+            "jellyfin_device_id",
         )
     }
 }
