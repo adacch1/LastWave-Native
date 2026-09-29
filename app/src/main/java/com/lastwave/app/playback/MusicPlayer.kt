@@ -712,6 +712,22 @@ class MusicPlayer @Inject constructor(
             val videoId = rejectedYouTubeCandidate?.videoId ?: trackVideoId
             val httpStatus = error.httpStatusCodeOrNull()
 
+            if (JellyfinClient.itemIdOf(currentTrack?.playbackUrl) != null && failedMediaId?.startsWith("local:") == true) {
+                // Never fall through to the YouTube retry below; only a gone item or a signed-out open skips ahead.
+                val message = when {
+                    httpStatus == 401 -> "Jellyfin session expired. Sign in again in Settings."
+                    isExplicitlyUnplayableFailure(error) -> "Signed out of Jellyfin. Sign in again in Settings."
+                    else -> "Can't play from Jellyfin. Check the server connection in Settings."
+                }
+                scheduleUnavailableMediaSkip(
+                    failedIndex, failedMediaId, failure = error,
+                    allowAutoSkip = !playedAudibly && (httpStatus == 404 || isExplicitlyUnplayableFailure(error)),
+                    unavailableMessage = message,
+                )
+                _state.update { it.copy(error = message, isPlaying = false, isBuffering = false) }
+                return
+            }
+
             if (currentTrack?.playbackUrl != null && failedMediaId?.startsWith("local:") == true) {
                 _state.update { it.copy(error = error.message ?: "Local file playback error (${error.errorCodeName})", isPlaying = false, isBuffering = false) }
                 scheduleUnavailableMediaSkip(failedIndex, failedMediaId, failure = error, allowAutoSkip = !playedAudibly)
@@ -1588,7 +1604,8 @@ class MusicPlayer @Inject constructor(
         playHistory.clear()
         latePreloadKey = null
         lastPreloadRetryMs = 0L
-        radioQueueActive = startRadio
+        val radio = startRadio && JellyfinClient.itemIdOf(track.playbackUrl) == null
+        radioQueueActive = radio
         startResolvedQueuePlayback(
             tracks = listOf(track),
             selectedIndex = 0,
@@ -1596,7 +1613,7 @@ class MusicPlayer @Inject constructor(
             sourceLabel = sourceLabel,
             endlessDiscover = false,
         )
-        if (startRadio) {
+        if (radio) {
             _state.update { it.copy(isEndlessQueue = true) }
             startRadioQueue(track)
         }
@@ -1776,7 +1793,7 @@ class MusicPlayer @Inject constructor(
                 currentCoroutineContext().ensureActive()
                 if (generation != playRequestGeneration.get()) return@launch
                 logResolutionFailure(selectedTrack, "resolve-before-prepare", 0, error)
-                if (selectedTrack.mediaIdKey() !in losslessBypassMediaIds) {
+                if (JellyfinClient.itemIdOf(selectedTrack.playbackUrl) == null && selectedTrack.mediaIdKey() !in losslessBypassMediaIds) {
                     losslessBypassMediaIds += selectedTrack.mediaIdKey()
                     val ytFallback = try {
                         resolveYoutubeTrackAudioStream(selectedTrack, selectedTrack.videoId)
@@ -3414,6 +3431,7 @@ class MusicPlayer @Inject constructor(
      * YouTube Music identity, album and high-resolution catalog artwork.
      */
     private suspend fun matchMetadata(track: PlayableTrack): PlayableTrack {
+        if (JellyfinClient.itemIdOf(track.playbackUrl) != null) return track
         if (!track.videoId.isNullOrBlank() && !track.artworkUrl.isNullOrBlank()) return track
         track.videoId?.takeIf(String::isNotBlank)?.let { videoId ->
             return track.copy(
@@ -4280,7 +4298,9 @@ class MusicPlayer @Inject constructor(
                 }
             } else {
                 val currentTrack = player.currentMediaItem?.toPlayableTrack()
-                if (currentTrack != null && player.repeatMode != Player.REPEAT_MODE_ONE) {
+                if (currentTrack != null && player.repeatMode != Player.REPEAT_MODE_ONE &&
+                    JellyfinClient.itemIdOf(currentTrack.playbackUrl) == null
+                ) {
                     radioQueueActive = true
                     _state.update { it.copy(isEndlessQueue = true) }
                     startRadioQueue(currentTrack, resumePlaybackImmediately = true)
@@ -4450,6 +4470,7 @@ class MusicPlayer @Inject constructor(
         expectedGeneration: Long = playRequestGeneration.get(),
         failure: Throwable,
         allowAutoSkip: Boolean = true,
+        unavailableMessage: String = "Track unavailable",
     ) {
         if (failure is CancellationException || expectedGeneration != playRequestGeneration.get()) return
         if (!allowAutoSkip) {
@@ -4483,7 +4504,7 @@ class MusicPlayer @Inject constructor(
                 val nextIndex = nextQueueIndex(snapshot)
                 if (nextIndex == C.INDEX_UNSET) {
                     player.stop()
-                    _state.update { it.copy(isPlaying = false, isBuffering = false, error = "Track unavailable") }
+                    _state.update { it.copy(isPlaying = false, isBuffering = false, error = unavailableMessage) }
                 } else {
                     playPendingQueueItem(nextIndex, snapshot)
                 }
@@ -4507,7 +4528,7 @@ class MusicPlayer @Inject constructor(
             if (nextIndex == C.INDEX_UNSET) {
                 player.stop()
                 _state.update {
-                    it.copy(isPlaying = false, isBuffering = false, error = "Track unavailable")
+                    it.copy(isPlaying = false, isBuffering = false, error = unavailableMessage)
                 }
                 return@launch
             }
@@ -5810,6 +5831,7 @@ class MusicPlayer @Inject constructor(
 
     private fun publishLocalTrackQuality(track: PlayableTrack) {
         val url = track.playbackUrl ?: return
+        if (JellyfinClient.itemIdOf(url) != null) return
         val retriever = android.media.MediaMetadataRetriever()
         try {
             if (url.startsWith("content://")) {
