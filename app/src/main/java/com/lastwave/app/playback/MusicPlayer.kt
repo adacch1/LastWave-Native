@@ -306,6 +306,7 @@ class MusicPlayer @Inject constructor(
     private var preloadJob: Job? = null
     private var currentTrackCacheJob: Job? = null
     private val resolutionRequests = ConcurrentHashMap<List<Any?>, Pair<Long, Deferred<ResolvedStream>>>()
+    @Volatile private var jellyfinCopyCooldownUntilMs = 0L
     private var discoverQueueLoadJob: Job? = null
     private var discoverQueueActive = false
     private var radioQueueLoadJob: Job? = null
@@ -704,7 +705,9 @@ class MusicPlayer @Inject constructor(
                 ?.let(preparedStreams::get)
             val customCacheKey = player.currentMediaItem?.localConfiguration?.customCacheKey
             val failedLocalStream = player.currentMediaItem?.localConfiguration?.uri?.scheme in setOf("file", "content")
-            val failedLosslessStream = !failedLocalStream && (rejectedStream?.isLossless
+            // A YouTube track that was playing your Jellyfin copy; retry on YouTube without blaming it.
+            val failedJellyfinCopy = rejectedStream?.cacheKey?.startsWith(JellyfinClient.ID_PREFIX) == true
+            val failedLosslessStream = !failedLocalStream && !failedJellyfinCopy && (rejectedStream?.isLossless
                 ?: customCacheKey?.startsWith("lossless:")
                 ?: _state.value.isLossless)
             val rejectedYouTubeCandidate = rejectedStream?.youtubeCandidate
@@ -747,7 +750,7 @@ class MusicPlayer @Inject constructor(
                 if (failedMediaId != null && (errorRetryCount > 0 || !isRetryablePlaybackFailure(error))) {
                     losslessBypassMediaIds += failedMediaId
                 }
-            } else if (!failedLocalStream && !videoId.isNullOrBlank()) {
+            } else if (!failedLocalStream && !failedJellyfinCopy && !videoId.isNullOrBlank()) {
                 if (rejectedYouTubeCandidate == null) innerTube.invalidateCache(videoId)
                 innerTube.reportPlaybackFailure(videoId, rejectedYouTubeCandidate)
             }
@@ -756,7 +759,7 @@ class MusicPlayer @Inject constructor(
 
             if (currentTrack != null &&
                 errorRetryCount < MAX_PLAYBACK_RETRIES &&
-                (failedLocalStream || failedLosslessStream || confirmedUnplayable || isRetryablePlaybackFailure(error))
+                (failedLocalStream || failedJellyfinCopy || failedLosslessStream || confirmedUnplayable || isRetryablePlaybackFailure(error))
             ) {
                 errorRetryCount++
                 val retry = errorRetryCount
@@ -770,7 +773,7 @@ class MusicPlayer @Inject constructor(
                             runCatching { mediaCache.removeResource(cacheKey) }
                             preparedStreams.remove(cacheKey)
                         }
-                        val retryDelayMs = if (failedLocalStream) 0L else playbackRetryDelayMs(error, retry)
+                        val retryDelayMs = if (failedLocalStream || failedJellyfinCopy) 0L else playbackRetryDelayMs(error, retry)
                         if (retryDelayMs > 0L) delay(retryDelayMs)
                         currentCoroutineContext().ensureActive()
                         val updated = currentTrack.copy(
@@ -4918,7 +4921,11 @@ class MusicPlayer @Inject constructor(
         allowLocalDownloads: Boolean = true,
     ): ResolvedStream = withContext(Dispatchers.IO) {
         val misc = runCatching { settingsPreferences.settings.first() }.getOrDefault(MiscSettings())
-        val key = listOf(track.title, track.artist, track.album, videoId, allowLossless, misc.losslessQuality, misc.dolbyAtmosEnabled, misc.preferLosslessStreaming, misc.preferProviderModules, excludedLosslessUrls, allowLocalDownloads)
+        // Toggling "Prefer my Jellyfin copies" or signing out must not replay a cached copy.
+        val jellyfinCopies = runCatching {
+            jellyfinClient.get().let { it.preferCopies.first() && it.connection.first().isConnected }
+        }.getOrDefault(false)
+        val key = listOf(track.title, track.artist, track.album, videoId, allowLossless, misc.losslessQuality, misc.dolbyAtmosEnabled, misc.preferLosslessStreaming, misc.preferProviderModules, excludedLosslessUrls, allowLocalDownloads, jellyfinCopies)
         val now = SystemClock.elapsedRealtime()
         resolutionRequests.entries.removeIf { now - it.value.first > 60_000L }
         if (resolutionRequests.size >= 64) {
@@ -4962,6 +4969,11 @@ class MusicPlayer @Inject constructor(
         }
         val youtubeDeferred = applicationScope.async(Dispatchers.IO) {
             runCatching { resolveYoutubeTrackAudioStream(track, videoId) }.getOrNull()
+        }
+        // Your own Jellyfin copy beats every remote source; local downloads still win.
+        // Retries pass allowLocalDownloads = false, so a failed copy falls back to YouTube.
+        val jellyfinDeferred = if (!allowLocalDownloads) null else applicationScope.async(Dispatchers.IO) {
+            runCatching { resolveJellyfinCopy(track) }.getOrNull()
         }
 
         val normalizedArtist = track.artist.trim()
@@ -5019,17 +5031,21 @@ class MusicPlayer @Inject constructor(
             return try {
                 localDeferred.await()?.also {
                     android.util.Log.i("MusicPlayer", "[PLAYBACK] local-download hit for '${track.title}' key=${it.cacheKey}")
-                } ?: (youtubeDeferred.await()
-                    ?: runCatching { resolveYoutubeTrackAudioStream(track, videoId) }.getOrNull()
-                    ?: resolveYoutubeTrackAudioStream(track, null))
+                } ?: awaitJellyfinCopy(jellyfinDeferred, forkStart)
+                    ?: (youtubeDeferred.await()
+                        ?: runCatching { resolveYoutubeTrackAudioStream(track, videoId) }.getOrNull()
+                        ?: resolveYoutubeTrackAudioStream(track, null))
             } finally {
                 youtubeDeferred.cancel()
                 localDeferred.cancel()
+                jellyfinDeferred?.cancel()
             }
         }
 
         return try {
             val localStream = localDeferred.await()
+            val jellyfinStream = if (localStream == null) awaitJellyfinCopy(jellyfinDeferred, forkStart) else null
+            if (jellyfinStream != null) return jellyfinStream
             if (localStream != null) {
                 android.util.Log.i("MusicPlayer", "[PLAYBACK] local-download hit for '${track.title}' key=${localStream.cacheKey}")
                 localStream
@@ -5076,10 +5092,49 @@ class MusicPlayer @Inject constructor(
         } finally {
             localDeferred.cancel()
             youtubeDeferred.cancel()
+            jellyfinDeferred?.cancel()
             if (activeUpgradeDeferred !== losslessDeferred) {
                 losslessDeferred.cancel()
             }
         }
+    }
+
+    /** Waits for the Jellyfin copy lookup within its window from [forkStart]. */
+    private suspend fun awaitJellyfinCopy(deferred: Deferred<ResolvedStream?>?, forkStart: Long): ResolvedStream? {
+        if (deferred == null) return null
+        if (deferred.isCompleted) return deferred.await()
+        val budgetMs = (JELLYFIN_COPY_WAIT_MS - (SystemClock.elapsedRealtime() - forkStart)).coerceAtLeast(0L)
+        val stream = withTimeoutOrNull(budgetMs) { deferred.await() }
+        // A blocked OkHttp call ignores cancellation, so a slow or unreachable server
+        // would never report failure; start the cooldown here instead.
+        if (stream == null && !deferred.isCompleted) {
+            jellyfinCopyCooldownUntilMs = SystemClock.elapsedRealtime() + JELLYFIN_COPY_COOLDOWN_MS
+        }
+        return stream
+    }
+
+    /** Stream of your own Jellyfin copy of [track], or null. Skips lookups for a minute after the server fails. */
+    private suspend fun resolveJellyfinCopy(track: PlayableTrack): ResolvedStream? {
+        if (SystemClock.elapsedRealtime() < jellyfinCopyCooldownUntilMs) return null
+        val jellyfin = jellyfinClient.get()
+        if (!jellyfin.connection.first().isConnected || !jellyfin.preferCopies.first()) return null
+        val artist = track.artist.trim()
+        if (artist.isBlank() || artist.equals("Unknown artist", ignoreCase = true)) return null
+        val item = jellyfin.findCopy(track.title, artist, track.durationMs)
+            .onFailure { jellyfinCopyCooldownUntilMs = SystemClock.elapsedRealtime() + JELLYFIN_COPY_COOLDOWN_MS }
+            .getOrNull() ?: return null
+        val (url, headers) = jellyfin.streamRequest(item.id) ?: return null
+        android.util.Log.i("MusicPlayer", "[PLAYBACK] Jellyfin copy for '${track.title}' -> item ${item.id}")
+        return ResolvedStream(
+            url = url,
+            mimeType = JellyfinClient.mimeTypeForContainer(item.container) ?: "audio/mpeg",
+            bitrateKbps = null,
+            audioCodec = item.container?.substringBefore(',')?.uppercase(),
+            cacheKey = JellyfinClient.ID_PREFIX + item.id,
+            requestHeaders = headers,
+            isLossless = item.container?.substringBefore(',')?.lowercase() in setOf("flac", "alac", "wav"),
+            durationMs = item.runTimeTicks?.div(10_000L),
+        )
     }
 
     private suspend fun resolveLosslessTrackAudioStream(
@@ -6161,6 +6216,9 @@ class MusicPlayer @Inject constructor(
 
         const val YOUTUBE_PROMOTE_BUDGET_MS = 12_000L
         const val MISSING_ARTIST_METADATA_TIMEOUT_MS = 1_200L
+        // ponytail: sized for a LAN server; raise if remote servers miss the window
+        const val JELLYFIN_COPY_WAIT_MS = 1_500L
+        const val JELLYFIN_COPY_COOLDOWN_MS = 60_000L
         /** Total cap for one YouTube fallback chain from fork, covering the
          *  promote wait plus every stacked re-resolve. Normal resolves take
          *  seconds; past this the track fails fast instead of spinning. */

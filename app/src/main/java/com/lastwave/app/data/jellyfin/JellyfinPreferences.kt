@@ -60,6 +60,16 @@ class JellyfinPreferences @Inject constructor(
         dataStore.edit { prefs -> prefs[MODE_KEY] = on }
     }
 
+    /** Play your Jellyfin copy of a YouTube song when one matches. On by default. */
+    val preferCopies: Flow<Boolean> = dataStore.data
+        .recoverPreferences(TAG)
+        .map { it.readSafely(PREFER_COPIES_KEY) != false }
+        .distinctUntilChanged()
+
+    suspend fun setPreferCopies(on: Boolean) {
+        dataStore.edit { prefs -> prefs[PREFER_COPIES_KEY] = on }
+    }
+
     /** Stable per-install id. Jellyfin keys sessions by device, so a new id
      *  on every login would pile up stale devices on the server dashboard. */
     suspend fun deviceId(): String {
@@ -102,5 +112,6 @@ class JellyfinPreferences @Inject constructor(
         val ACCESS_TOKEN_KEY = stringPreferencesKey("jellyfin_access_token")
         val DEVICE_ID_KEY = stringPreferencesKey("jellyfin_device_id")
         val MODE_KEY = booleanPreferencesKey("jellyfin_mode")
+        val PREFER_COPIES_KEY = booleanPreferencesKey("jellyfin_prefer_copies")
     }
 }

@@ -455,6 +455,7 @@ fun SettingsScreen(
     val jellyfinConnection by jellyfinViewModel.connection.collectAsStateWithLifecycle()
     val jellyfinConnecting by jellyfinViewModel.connecting.collectAsStateWithLifecycle()
     val jellyfinError by jellyfinViewModel.error.collectAsStateWithLifecycle()
+    val jellyfinPreferCopies by jellyfinViewModel.preferCopies.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
     // Last.fm web auth (Settings → Integrations): open the auth URL in Custom
@@ -1480,6 +1481,24 @@ fun SettingsScreen(
                                     onDisconnect = jellyfinViewModel::disconnect,
                                     isHighlighted = (highlightedSettingId == "jellyfin.connect"),
                                 )
+                                SettingsGroup(rowCount = 1) { _, position ->
+                                        SettingsToggleCard(
+                                            icon = Icons.Filled.Dns,
+                                            iconContainer = MaterialTheme.colorScheme.secondaryContainer,
+                                            iconTint = MaterialTheme.colorScheme.onSecondaryContainer,
+                                            title = "Prefer my Jellyfin copies",
+                                            subtitle = when {
+                                                !jellyfinConnection.isConnected -> "Connect a server to use your own copies"
+                                                jellyfinPreferCopies -> "YouTube songs play from your server when it has the same recording"
+                                                else -> "YouTube songs always play from YouTube"
+                                            },
+                                            checked = jellyfinPreferCopies && jellyfinConnection.isConnected,
+                                            onCheckedChange = jellyfinViewModel::setPreferCopies,
+                                            position = position,
+                                            enabled = jellyfinConnection.isConnected,
+                                            isHighlighted = (highlightedSettingId == "jellyfin.prefer_copies"),
+                                        )
+                                    }
                             }
                         }
                     }

@@ -252,4 +252,38 @@ class JellyfinClientTest {
         assertThat(page.artist).isEmpty()
         assertThat(page.artistBrowseId).isNull()
     }
+
+    private fun song(id: String, name: String, artists: List<String>, seconds: Long?) =
+        JellyfinItem(id = id, name = name, artists = artists, runTimeTicks = seconds?.let { it * 10_000_000L })
+
+    @Test
+    fun bestCopy_matchesSameRecordingIgnoringVideoNoise() {
+        val items = listOf(song("a", "Blinding Lights", listOf("The Weeknd"), 200))
+        assertThat(JellyfinClient.bestCopy(items, "Blinding Lights (Official Video)", "The Weeknd", 201_500)?.id).isEqualTo("a")
+    }
+
+    @Test
+    fun bestCopy_matchesEachArtistOfACollaboration() {
+        val items = listOf(song("a", "Levitating", listOf("Dua Lipa", "DaBaby"), 203))
+        assertThat(JellyfinClient.bestCopy(items, "Levitating", "DaBaby & Dua Lipa", 203_000)?.id).isEqualTo("a")
+    }
+
+    @Test
+    fun bestCopy_rejectsUnaskedLiveTakeWrongArtistAndLengthMismatch() {
+        assertThat(JellyfinClient.bestCopy(listOf(song("a", "Yellow (Live)", listOf("Coldplay"), 266)), "Yellow", "Coldplay", 266_000)).isNull()
+        assertThat(JellyfinClient.bestCopy(listOf(song("a", "Yellow", listOf("Someone Else"), 266)), "Yellow", "Coldplay", 266_000)).isNull()
+        assertThat(JellyfinClient.bestCopy(listOf(song("a", "Yellow", listOf("Coldplay"), 280)), "Yellow", "Coldplay", 266_000)).isNull()
+    }
+
+    @Test
+    fun bestCopy_withoutDurationNeedsExactTitleAndArtist() {
+        assertThat(JellyfinClient.bestCopy(listOf(song("a", "Yellow", listOf("Coldplay"), null)), "Yellow", "Coldplay", null)?.id).isEqualTo("a")
+        assertThat(JellyfinClient.bestCopy(listOf(song("a", "Yellow Song", listOf("Coldplay"), null)), "Yellow", "Coldplay", null)).isNull()
+    }
+
+    @Test
+    fun bestCopy_prefersClosestDuration() {
+        val items = listOf(song("far", "Yellow", listOf("Coldplay"), 269), song("near", "Yellow", listOf("Coldplay"), 266))
+        assertThat(JellyfinClient.bestCopy(items, "Yellow", "Coldplay", 266_200)?.id).isEqualTo("near")
+    }
 }

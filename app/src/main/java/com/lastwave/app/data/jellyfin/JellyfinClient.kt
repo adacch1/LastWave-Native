@@ -5,9 +5,11 @@ import com.lastwave.app.BuildConfig
 import com.lastwave.app.data.model.AlbumPageData
 import com.lastwave.app.data.model.ArtistAlbumItem
 import com.lastwave.app.data.model.ArtistPageData
+import com.lastwave.app.data.music.TextMatch
 import com.lastwave.app.data.search.SearchResultItem
 import com.lastwave.app.data.search.SearchTab
 import com.lastwave.app.playback.PlayableTrack
+import com.lastwave.app.util.ArtistHelper
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -112,6 +114,21 @@ class JellyfinClient @Inject constructor(
                 response.header("Content-Type")?.substringBefore(';')?.trim()?.takeIf { it.startsWith("audio/") }
             }
         }.getOrNull()
+    }
+
+    val preferCopies = preferences.preferCopies
+
+    suspend fun setPreferCopies(on: Boolean) = preferences.setPreferCopies(on)
+
+    /** Your own copy of a YouTube song, or null when none matches confidently. */
+    internal suspend fun findCopy(title: String, artist: String, durationMs: Long?): Result<JellyfinItem?> {
+        // Jellyfin matches searchTerm as a substring, so drop YouTube noise such as "Official Video".
+        val query = TextMatch.normalize(TextMatch.baseTitle(title)).split(' ')
+            .filter { it.isNotBlank() && it !in TextMatch.MATCH_NOISE_WORDS }
+            .joinToString(" ")
+            .ifBlank { title }
+        return items("Audio", "searchTerm" to query, "Limit" to "20") { item, _ -> item }
+            .map { bestCopy(it, title, artist, durationMs) }
     }
 
     suspend fun search(tab: SearchTab, query: String): Result<List<SearchResultItem>> {
@@ -279,6 +296,7 @@ class JellyfinClient @Inject constructor(
         }
 
     companion object {
+        private const val COPY_DURATION_TOLERANCE_MS = 4_000L
         private val JSON_MEDIA_TYPE = "application/json".toMediaType()
         private const val TICKS_PER_MS = 10_000L
 
@@ -290,6 +308,35 @@ class JellyfinClient @Inject constructor(
 
         /** The item id when [v] is a `jellyfin:` identity, otherwise null. */
         fun itemIdOf(v: String?): String? = v?.takeIf { it.startsWith(ID_PREFIX) }?.removePrefix(ID_PREFIX)
+
+        /**
+         * Picks the item that is the same recording, or null. Strict on purpose:
+         * a wrong match plays the wrong song, so a miss simply falls back to YouTube.
+         */
+        internal fun bestCopy(items: List<JellyfinItem>, title: String, artist: String, durationMs: Long?): JellyfinItem? {
+            // Token sets drop noise such as "Official Video" that YouTube titles carry.
+            val wantedTitle = TextMatch.tokens(TextMatch.baseTitle(title))
+            val wantedArtists = ArtistHelper.splitArtists(artist).ifEmpty { listOf(artist) }
+            val wantedVariants = TextMatch.tokens(title).intersect(TextMatch.VARIANT_WORDS)
+            return items.filter { item ->
+                val titleExact = wantedTitle.isNotEmpty() && TextMatch.tokens(TextMatch.baseTitle(item.name)) == wantedTitle
+                if (!titleExact && TextMatch.similarity(item.name, title) < 90) return@filter false
+                // A live or remix take is a different recording, in either direction.
+                if (TextMatch.tokens(item.name).intersect(TextMatch.VARIANT_WORDS) != wantedVariants) return@filter false
+                val itemArtists = (item.artists + listOfNotNull(item.albumArtist)).filter { it.isNotBlank() }
+                val artistScore = itemArtists.maxOfOrNull { a -> wantedArtists.maxOf { TextMatch.similarity(a, it) } } ?: 0
+                if (artistScore < 85) return@filter false
+                val itemMs = item.runTimeTicks?.div(TICKS_PER_MS)
+                if (durationMs != null && durationMs > 0 && itemMs != null) {
+                    kotlin.math.abs(itemMs - durationMs) <= COPY_DURATION_TOLERANCE_MS
+                } else {
+                    titleExact && artistScore == 100
+                }
+            }.minByOrNull { item ->
+                val itemMs = item.runTimeTicks?.div(TICKS_PER_MS)
+                if (durationMs != null && itemMs != null) kotlin.math.abs(itemMs - durationMs) else 0L
+            }
+        }
 
         fun isImageUrl(u: String?): Boolean = u?.contains("/Images/Primary") == true
 

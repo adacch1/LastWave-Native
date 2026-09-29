@@ -789,6 +789,23 @@ object SettingsSearchIndex {
                     type = EntryType.ACTION,
                 )
             )
+            add(
+                SettingsEntry(
+                    id = "jellyfin.prefer_copies",
+                    title = "Prefer My Jellyfin Copies",
+                    subtitle = "Play songs from your Jellyfin server instead of YouTube when it has the same recording",
+                    keywords = listOf(
+                        "jellyfin", "prefer", "own copy", "my library", "local copy", "flac",
+                        "instead of youtube", "self-hosted", "server"
+                    ),
+                    icon = Icons.Filled.Dns,
+                    iconContainer = { MaterialTheme.colorScheme.secondaryContainer },
+                    iconTint = { MaterialTheme.colorScheme.onSecondaryContainer },
+                    parentTab = SettingsTab.JELLYFIN,
+                    section = "Jellyfin Server",
+                    type = EntryType.TOGGLE,
+                )
+            )
 
             // ==========================================
             // TAB: LIBRARY & CONTENT

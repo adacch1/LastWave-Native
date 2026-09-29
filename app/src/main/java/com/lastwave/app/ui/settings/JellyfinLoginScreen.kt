@@ -47,6 +47,14 @@ class JellyfinLoginViewModel @Inject constructor(
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
 
+    val preferCopies: StateFlow<Boolean> = jellyfinClient.preferCopies
+        .catch { emit(true) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), true)
+
+    fun setPreferCopies(on: Boolean) {
+        viewModelScope.launch { runCatching { jellyfinClient.setPreferCopies(on) } }
+    }
+
     fun connect(serverUrl: String, username: String, password: String, switchSource: Boolean = false) {
         if (_connecting.value) return
         _connecting.value = true
