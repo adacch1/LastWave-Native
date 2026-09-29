@@ -30,7 +30,7 @@ class JellyfinClientTest {
     }
 
     @Test
-    fun itemJson_mapsToDirectStreamTrack() {
+    fun itemJson_mapsToJellyfinIdentityTrack() {
         val page = JellyfinClient.json.decodeFromString(
             ItemsResponse.serializer(),
             """
@@ -46,7 +46,8 @@ class JellyfinClientTest {
         assertEquals("A, B", track.artist)
         assertEquals(240_000L, track.durationMs)
         assertEquals("audio/flac", track.playbackMimeType)
-        assertEquals("https://jf.example/Audio/abc/stream?static=true&api_key=tok", track.playbackUrl)
+        assertEquals("jellyfin:abc", track.playbackUrl)
+        assertThat(track.playbackUrl).doesNotContain("tok")
         assertEquals("https://jf.example/Items/alb/Images/Primary?maxHeight=544&tag=t1", track.artworkUrl)
         assertNull(track.videoId)
     }

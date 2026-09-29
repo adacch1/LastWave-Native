@@ -60,6 +60,7 @@ import com.lastwave.app.data.music.ConfirmedUnplayableMediaException
 import com.lastwave.app.data.music.YouTubeAudioStream
 import com.lastwave.app.data.music.YouTubeMusicTrack
 import com.lastwave.app.data.music.YOUTUBE_WEB_USER_AGENT
+import com.lastwave.app.data.jellyfin.JellyfinClient
 import com.lastwave.app.data.lossless.LosslessAudioStream
 import com.lastwave.app.data.lossless.LosslessMusicApi
 import com.lastwave.app.data.plugin.ModuleDrmFactory
@@ -204,6 +205,7 @@ class MusicPlayer @Inject constructor(
     private val usbDacMonitor: UsbDacMonitor,
     private val exclusiveUsbOutput: ExclusiveUsbOutput,
     private val songPlayStatsRepository: dagger.Lazy<com.lastwave.app.data.repository.SongPlayStatsRepository>,
+    private val jellyfinClient: dagger.Lazy<JellyfinClient>,
 ) {
     private val appContext = context.applicationContext
     private val streamResolutionWakeLock by lazy {
@@ -244,7 +246,13 @@ class MusicPlayer @Inject constructor(
     }
 
     internal suspend fun resolveCastStream(track: PlayableTrack): ResolvedStream =
-        track.playbackUrl?.let { url ->
+        JellyfinClient.itemIdOf(track.playbackUrl)?.let { id ->
+            val jellyfin = jellyfinClient.get()
+            val (url, headers) = jellyfin.streamRequest(id) ?: throw java.io.IOException("Jellyfin signed out")
+            // Saved tracks carry no MIME type, so ask the server; the phone proxies the audio and keeps the token.
+            val mime = track.playbackMimeType ?: jellyfin.streamMimeType(id) ?: "audio/mpeg"
+            ResolvedStream(url, mime, null, null, JellyfinClient.ID_PREFIX + id, requestHeaders = headers)
+        } ?: track.playbackUrl?.let { url ->
             val mime = track.playbackMimeType ?: withContext(Dispatchers.IO) {
                 if (url.startsWith("content://")) appContext.contentResolver.getType(Uri.parse(url)) else null
             } ?: android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(
@@ -890,6 +898,13 @@ class MusicPlayer @Inject constructor(
                 throw java.io.IOException("Signed stream expired before open")
             }
             when {
+                // Resolved per open, so the token stays out of the URI, the cache key and the saved session.
+                dataSpec.uri.scheme == "jellyfin" -> {
+                    val (url, headers) = runBlocking(Dispatchers.IO) {
+                        jellyfinClient.get().streamRequest(dataSpec.uri.schemeSpecificPart)
+                    } ?: throw ConfirmedUnplayableMediaException("Jellyfin signed out")
+                    dataSpec.buildUpon().setUri(url).setKey(dataSpec.uri.toString()).build().withRequestHeaders(headers)
+                }
                 resolvedPlaceholder != null -> dataSpec.buildUpon()
                     .setUri(resolvedPlaceholder.url)
                     .setKey(resolvedPlaceholder.cacheKey)
@@ -1965,7 +1980,11 @@ class MusicPlayer @Inject constructor(
             resolveAndPlayQueueItem(player.currentMediaItemIndex)
             return@onMain
         }
-        if (player.playbackState == Player.STATE_IDLE) player.prepare()
+        if (player.playbackState == Player.STATE_IDLE) {
+            // A failed Jellyfin open leaves its error text; the re-prepare re-resolves with the current token.
+            _state.update { it.copy(error = null) }
+            player.prepare()
+        }
         if (player.playbackState == Player.STATE_ENDED) {
             seekTo(0)
             player.prepare()
@@ -5907,7 +5926,8 @@ class MusicPlayer @Inject constructor(
             .filter { it.title.isNotBlank() && it.artist.isNotBlank() }
             .map {
                 val isLocal = it.playbackUrl?.let { url ->
-                    url.startsWith("/") || url.startsWith("content://") || url.startsWith("file://")
+                    url.startsWith("/") || url.startsWith("content://") || url.startsWith("file://") ||
+                        url.startsWith(JellyfinClient.ID_PREFIX)
                 } == true
                 if (isLocal) it else it.copy(playbackUrl = null, playbackMimeType = null)
             }
@@ -5966,7 +5986,8 @@ class MusicPlayer @Inject constructor(
         val endIndex = minOf(sourceQueue.size, startIndex + MAX_PERSISTED_QUEUE_SIZE)
         val persistedQueue = sourceQueue.subList(startIndex, endIndex).map {
             val isLocal = it.playbackUrl?.let { url ->
-                url.startsWith("/") || url.startsWith("content://") || url.startsWith("file://")
+                url.startsWith("/") || url.startsWith("content://") || url.startsWith("file://") ||
+                    url.startsWith(JellyfinClient.ID_PREFIX)
             } == true
             if (isLocal) it else it.copy(playbackUrl = null, playbackMimeType = null)
         }

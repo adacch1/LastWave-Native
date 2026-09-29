@@ -26,8 +26,8 @@ class JellyfinException(message: String) : Exception(message)
 
 /**
  * Minimal Jellyfin REST client (server 10.9+): sign-in, search, browse queries
- * and stream requests. Results map straight to [PlayableTrack] with a direct
- * `playbackUrl`, so the player streams them without the YouTube resolver.
+ * and stream requests. Results map to [PlayableTrack] with a token-free
+ * `jellyfin:<id>` `playbackUrl`, which the player resolves when it opens the file.
  */
 @Singleton
 class JellyfinClient @Inject constructor(
@@ -270,8 +270,8 @@ class JellyfinClient @Inject constructor(
                 artist = artists.joinToString(", ").ifBlank { albumArtist.orEmpty() }.ifBlank { "Unknown artist" },
                 album = album,
                 artworkUrl = imageUrl(conn),
-                // static=true serves the original file untouched: no server transcode.
-                playbackUrl = "${conn.serverUrl}/Audio/$id/stream?static=true&api_key=${conn.accessToken}",
+                // Token-free identity; the player resolves it (static=true, no transcode) when the file opens.
+                playbackUrl = ID_PREFIX + id,
                 playbackMimeType = mimeTypeForContainer(container),
                 durationMs = runTimeTicks?.div(TICKS_PER_MS),
             )
