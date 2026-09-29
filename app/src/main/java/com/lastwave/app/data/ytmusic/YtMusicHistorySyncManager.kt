@@ -2,6 +2,7 @@ package com.lastwave.app.data.ytmusic
 
 import android.os.SystemClock
 import android.util.Log
+import com.lastwave.app.data.jellyfin.JellyfinClient
 import com.lastwave.app.data.music.InnerTubeMusicApi
 import com.lastwave.app.data.music.YouTubeMusicTrack
 import com.lastwave.app.playback.MusicPlayer
@@ -135,7 +136,7 @@ class YtMusicHistorySyncManager @Inject constructor(
             submittedSessionId = null
             return
         }
-        if (!historyEnabled || !activeAccount.isConnected) return
+        if (!historyEnabled || !activeAccount.isConnected || JellyfinClient.itemIdOf(track?.playbackUrl) != null) return
         val sessionId = "$sessionEpoch|$key"
         if (submittedSessionId == sessionId) return
 

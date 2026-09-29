@@ -2,6 +2,7 @@ package com.lastwave.app.data.ytmusic
 
 import android.util.Log
 import com.lastwave.app.data.generate.youtubeVideoIdOrNull
+import com.lastwave.app.data.jellyfin.JellyfinClient
 import com.lastwave.app.data.music.InnerTubeMusicApi
 import com.lastwave.app.data.music.YtOwnedPlaylist
 import com.lastwave.app.data.playlist.PlaylistRepository
@@ -137,7 +138,10 @@ class YtMusicSyncManager @Inject constructor(
             // playlist. Selective-sync users opt in via the sync picker.
             val allPlaylists = playlistRepository.getAll().filterNot { it.remotePlaylistId != null }
             val syncedIds = preferences.syncedPlaylistIds.first()
-            val playlists = if (syncedIds != null) allPlaylists.filter { it.id in syncedIds } else allPlaylists
+            // Jellyfin-only playlists (incl. an all-Jellyfin Liked Songs) never mirror or leak their title.
+            // Filtered here, not on allPlaylists, so orphan detection still sees them and keeps an existing mirror.
+            val playlists = (if (syncedIds != null) allPlaylists.filter { it.id in syncedIds } else allPlaylists)
+                .filterNot { p -> p.tracks.isNotEmpty() && p.tracks.all { JellyfinClient.itemIdOf(it.url) != null } }
 
             if (playlists.isEmpty()) {
                 _state.value = YtSyncState.Completed(System.currentTimeMillis(), 0, 0, 0)
@@ -276,6 +280,7 @@ class YtMusicSyncManager @Inject constructor(
         val resolvedVideoIds = coroutineScope {
             playlist.tracks.map { track ->
                 async {
+                    if (JellyfinClient.itemIdOf(track.url) != null) return@async null
                     track.youtubeVideoIdOrNull()?.let { return@async it }
                     matchLimiter.withPermit {
                         val cacheKey = "${track.name}|${track.artist}".lowercase().trim()

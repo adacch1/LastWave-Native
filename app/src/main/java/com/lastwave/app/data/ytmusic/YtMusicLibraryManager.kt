@@ -6,6 +6,7 @@ import com.lastwave.app.data.generate.StoredTrack
 import com.lastwave.app.data.generate.toGenerated
 import com.lastwave.app.data.generate.toStored
 import com.lastwave.app.data.generate.youtubeVideoIdOrNull
+import com.lastwave.app.data.jellyfin.JellyfinClient
 import com.lastwave.app.data.music.InnerTubeMusicApi
 import com.lastwave.app.data.music.YouTubeMusicTrack
 import com.lastwave.app.data.music.YouTubePlaylistSummary
@@ -459,6 +460,7 @@ class YtMusicLibraryManager @Inject constructor(
             ?: remoteIdsByLocalId[localId]
             ?: _accountPlaylists.value.firstOrNull { stableRemoteId(it.id) == localId }?.id
             ?: return@withContext false
+        if (JellyfinClient.itemIdOf(track.url) != null) return@withContext false
         val exactVideoId = track.youtubeVideoIdOrNull()
         val match = if (exactVideoId == null) innerTube.findBestMatchOrNull(track.name, track.artist) else null
         val videoId = exactVideoId ?: match?.videoId ?: return@withContext false
@@ -484,7 +486,7 @@ class YtMusicLibraryManager @Inject constructor(
         localIds: Set<Long>,
         track: GeneratedTrack,
     ): Set<Long> = withContext(Dispatchers.IO) {
-        if (localIds.isEmpty()) return@withContext emptySet()
+        if (localIds.isEmpty() || JellyfinClient.itemIdOf(track.url) != null) return@withContext emptySet()
         val directVideoId = track.youtubeVideoIdOrNull()
         val match = if (directVideoId == null) innerTube.findBestMatchOrNull(track.name, track.artist) else null
         localIds.filterTo(mutableSetOf()) { localId ->
