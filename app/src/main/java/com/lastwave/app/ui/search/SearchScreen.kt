@@ -906,7 +906,7 @@ private fun SearchFilterPills(
     modifier: Modifier = Modifier,
 ) {
     val tabs = if (jellyfin) {
-        listOf(SearchTab.TRACKS to "Tracks", SearchTab.ALBUMS to "Albums")
+        listOf(SearchTab.TRACKS to "Tracks", SearchTab.ARTISTS to "Artists", SearchTab.ALBUMS to "Albums")
     } else {
         listOf(
             SearchTab.TRACKS to "Tracks",

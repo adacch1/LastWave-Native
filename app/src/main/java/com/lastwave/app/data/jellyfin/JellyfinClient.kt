@@ -3,10 +3,14 @@ package com.lastwave.app.data.jellyfin
 import android.os.Build
 import com.lastwave.app.BuildConfig
 import com.lastwave.app.data.model.AlbumPageData
+import com.lastwave.app.data.model.ArtistAlbumItem
+import com.lastwave.app.data.model.ArtistPageData
 import com.lastwave.app.data.search.SearchResultItem
 import com.lastwave.app.data.search.SearchTab
 import com.lastwave.app.playback.PlayableTrack
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
@@ -130,6 +134,11 @@ class JellyfinClient @Inject constructor(
                 val result = item.toResult(conn)
                 result.copy(subtitle = listOfNotNull(result.artist, result.subtitle).joinToString(" · ").ifBlank { null })
             }
+            SearchTab.ARTISTS -> items(
+                null,
+                "searchTerm" to q, "Limit" to "50", "SortBy" to "SortName",
+                path = "/Artists/AlbumArtists",
+            ) { item, conn -> item.toResult(conn) }
             else -> Result.success(emptyList())
         }
     }
@@ -141,6 +150,12 @@ class JellyfinClient @Inject constructor(
             "SortOrder" to if (descending) "Descending" else "Ascending",
             "Limit" to limit.toString(),
         ) { item, conn -> item.toResult(conn) }
+
+    // ponytail: /Artists/AlbumArtists is deprecated in 12.x; fall back to /Items?IncludeItemTypes=MusicArtist if removed
+    suspend fun artists(limit: Int = 30): Result<List<SearchResultItem>> =
+        items(null, "SortBy" to "SortName", "Limit" to limit.toString(), path = "/Artists/AlbumArtists") { item, conn ->
+            item.toResult(conn)
+        }
 
     /** Album page for a `jellyfin:<albumId>` ref (the id without the prefix). */
     suspend fun albumPage(ref: String, title: String, artist: String): Result<AlbumPageData> {
@@ -155,9 +170,45 @@ class JellyfinClient @Inject constructor(
                 browseId = ID_PREFIX + ref,
                 // empty album keeps a Jellyfin image URL so artwork never falls back to the name lookup
                 artworkUrl = head?.second?.artworkUrl ?: "$server/Items/$ref/Images/Primary?maxHeight=544",
+                artistBrowseId = head?.first?.albumArtists?.firstOrNull()?.id?.let { ID_PREFIX + it },
                 releaseYear = head?.first?.productionYear?.toString(),
                 trackCountText = "${rows.size} tracks",
                 tracks = rows.map { it.second },
+            )
+        }
+    }
+
+    /** Artist page for a `jellyfin:<artistId>` ref (the id without the prefix). Bio, tags and similar artists stay empty. */
+    suspend fun artistPage(artistId: String, name: String): Result<ArtistPageData> = coroutineScope {
+        // ponytail: 300 cap, page when libraries outgrow it
+        val songs = async {
+            items("Audio", "ArtistIds" to artistId, "SortBy" to "Album,ParentIndexNumber,IndexNumber", "Limit" to "300") { item, conn ->
+                item.toPlayableTrack(conn)
+            }
+        }
+        val albums = async {
+            items("MusicAlbum", "AlbumArtistIds" to artistId, "SortBy" to "ProductionYear,SortName", "SortOrder" to "Descending") { item, conn ->
+                item to ArtistAlbumItem(
+                    title = item.name,
+                    browseId = ID_PREFIX + item.id,
+                    year = item.productionYear?.toString(),
+                    artworkUrl = item.imageUrl(conn),
+                )
+            }
+        }
+        val tracks = songs.await()
+        val rows = albums.await()
+        val server = connection.first().serverUrl
+        tracks.mapCatching { top ->
+            val albumRows = rows.getOrThrow()
+            ArtistPageData(
+                // The server name wins over the route argument.
+                name = albumRows.firstNotNullOfOrNull { (item, _) -> item.albumArtists.firstOrNull { it.id == artistId }?.name } ?: name,
+                browseId = ID_PREFIX + artistId,
+                artworkUrl = "$server/Items/$artistId/Images/Primary?maxHeight=544",
+                topSongs = top,
+                albums = albumRows.map { it.second },
+                fallbackArtworkUrl = albumRows.firstOrNull()?.second?.artworkUrl,
             )
         }
     }

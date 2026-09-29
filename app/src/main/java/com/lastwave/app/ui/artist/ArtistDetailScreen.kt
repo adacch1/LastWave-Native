@@ -292,7 +292,8 @@ fun ArtistDetailScreen(
                                         verticalAlignment = Alignment.CenterVertically,
                                     ) {
                                         Text(
-                                            text = com.lastwave.app.util.ArtistHelper.primaryArtist(data.name),
+                                            text = if (com.lastwave.app.data.jellyfin.JellyfinClient.itemIdOf(data.browseId) != null) data.name
+                                            else com.lastwave.app.util.ArtistHelper.primaryArtist(data.name),
                                             style = MaterialTheme.typography.headlineLarge,
                                             fontWeight = FontWeight.ExtraBold,
                                             color = Color.White,
@@ -767,7 +768,9 @@ fun ArtistDetailScreen(
                         exit = fadeOut() + scaleOut(targetScale = 0.9f),
                     ) {
                         Text(
-                            text = com.lastwave.app.util.ArtistHelper.primaryArtist((uiState as? ArtistUiState.Success)?.data?.name ?: artistName),
+                            text = (uiState as? ArtistUiState.Success)?.data
+                                ?.takeIf { com.lastwave.app.data.jellyfin.JellyfinClient.itemIdOf(it.browseId) != null }?.name
+                                ?: com.lastwave.app.util.ArtistHelper.primaryArtist((uiState as? ArtistUiState.Success)?.data?.name ?: artistName),
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
                             maxLines = 1,

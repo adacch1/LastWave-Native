@@ -31,6 +31,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
+import com.lastwave.app.data.feed.FeedArtist
 import com.lastwave.app.data.jellyfin.JellyfinClient
 import com.lastwave.app.data.search.SearchResultItem
 import com.lastwave.app.ui.common.ExpressiveHeader
@@ -62,6 +63,7 @@ class JellyfinFeedViewModel @Inject constructor(
         val error: String? = null,
         val recent: List<SearchResultItem> = emptyList(),
         val albums: List<SearchResultItem> = emptyList(),
+        val artists: List<SearchResultItem> = emptyList(),
     )
 
     val state = MutableStateFlow(State())
@@ -88,12 +90,14 @@ class JellyfinFeedViewModel @Inject constructor(
             val all = listOf(
                 async { jellyfin.albums("DateCreated", descending = true) },
                 async { jellyfin.albums("Random") },
+                async { jellyfin.artists() },
             ).awaitAll()
             loadedAtMs = System.currentTimeMillis()
             state.value = State(
                 loading = false,
                 recent = all[0].getOrDefault(emptyList()),
                 albums = all[1].getOrDefault(emptyList()),
+                artists = all[2].getOrDefault(emptyList()),
                 error = all.firstNotNullOfOrNull { r ->
                     r.exceptionOrNull()?.let { it.message ?: "Couldn't reach your Jellyfin server" }
                 },
@@ -114,7 +118,7 @@ fun JellyfinFeedScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
-    val hasContent = state.recent.isNotEmpty() || state.albums.isNotEmpty()
+    val hasContent = state.recent.isNotEmpty() || state.albums.isNotEmpty() || state.artists.isNotEmpty()
 
     LifecycleStartEffect(Unit) {
         viewModel.refreshIfStale()
@@ -181,6 +185,11 @@ fun JellyfinFeedScreen(
                                 Shelf("Albums") { AlbumRow(state.albums, nav) }
                             }
                         }
+                        if (state.artists.isNotEmpty()) {
+                            item(key = "artists") {
+                                Shelf("Artists") { ArtistRow(state.artists, nav) }
+                            }
+                        }
                     }
                 }
             }
@@ -219,6 +228,18 @@ private fun AlbumRow(albums: List<SearchResultItem>, nav: ArtistAlbumNavigator) 
                 artworkUrl = album.artworkUrl,
                 fallbackIcon = Icons.Filled.Album,
                 onClick = { nav.openAlbum(album.name, album.artist.orEmpty(), album.entityId) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun ArtistRow(artists: List<SearchResultItem>, nav: ArtistAlbumNavigator) {
+    FeedMediaRow {
+        items(artists) { artist ->
+            ArtistAvatarCard(
+                artist = FeedArtist(artist.name, artist.entityId, artist.artworkUrl?.takeIf { "&tag=" in it }), // untagged = no art, show the letter fallback
+                onClick = { nav.openArtist(artist.name, artist.entityId) },
             )
         }
     }

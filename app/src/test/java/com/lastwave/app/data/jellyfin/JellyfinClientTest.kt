@@ -9,7 +9,11 @@ import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.runBlocking
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
+import okhttp3.Protocol
+import okhttp3.Response
+import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -124,5 +128,87 @@ class JellyfinClientTest {
         every { prefs.mode } returns flowOf(false)
 
         assertThat(JellyfinClient(OkHttpClient(), prefs).streamRequest("abc")).isNull()
+    }
+
+    /** A client whose HTTP layer answers each request URL with the JSON that [body] returns. */
+    private fun clientServing(body: (String) -> String): JellyfinClient {
+        val prefs = mockk<JellyfinPreferences>()
+        every { prefs.connection } returns flowOf(JellyfinConnection("https://jf.example", "user", "me", "tok"))
+        every { prefs.mode } returns flowOf(false)
+        coEvery { prefs.deviceId() } returns "dev1"
+        val http = OkHttpClient.Builder().addInterceptor { chain ->
+            val request = chain.request()
+            Response.Builder().request(request).protocol(Protocol.HTTP_1_1).code(200).message("OK")
+                .body(body(request.url.toString()).toResponseBody("application/json".toMediaType()))
+                .build()
+        }.build()
+        return JellyfinClient(http, prefs)
+    }
+
+    @Test
+    fun albumPage_setsArtistBrowseIdFromAlbumArtists() = runBlocking {
+        val client = clientServing {
+            """{"Items":[{"Id":"t1","Name":"Song","Album":"Record","AlbumArtist":"AC/DC","ProductionYear":1980,
+              "AlbumArtists":[{"Id":"art","Name":"AC/DC"}],"ImageTags":{}}]}"""
+        }
+
+        val page = client.albumPage("alb", "Record", "AC").getOrThrow()
+
+        assertThat(page.artistBrowseId).isEqualTo("jellyfin:art")
+        assertThat(page.artist).isEqualTo("AC/DC")
+    }
+
+    @Test
+    fun albumPage_withoutAlbumArtistsHasNoArtistBrowseId() = runBlocking {
+        val client = clientServing { """{"Items":[{"Id":"t1","Name":"Song","ImageTags":{}}]}""" }
+
+        assertThat(client.albumPage("alb", "Record", "A").getOrThrow().artistBrowseId).isNull()
+    }
+
+    @Test
+    fun artistPage_mapsTracksAlbumsAndServerName() = runBlocking {
+        val client = clientServing { url ->
+            if ("IncludeItemTypes=MusicAlbum" in url) {
+                """{"Items":[{"Id":"alb1","Name":"Later","ProductionYear":1979,"ImageTags":{"Primary":"t1"},
+                  "AlbumArtists":[{"Id":"art","Name":"Earth, Wind & Fire"}]}]}"""
+            } else {
+                """{"Items":[{"Id":"s1","Name":"September","Artists":["Earth, Wind & Fire"],"ImageTags":{}}]}"""
+            }
+        }
+
+        val page = client.artistPage("art", "Earth").getOrThrow()
+
+        assertThat(page.name).isEqualTo("Earth, Wind & Fire")
+        assertThat(page.browseId).isEqualTo("jellyfin:art")
+        assertThat(page.artworkUrl).isEqualTo("https://jf.example/Items/art/Images/Primary?maxHeight=544")
+        assertThat(page.topSongs.single().playbackUrl).isEqualTo("jellyfin:s1")
+        assertThat(page.albums.single().browseId).isEqualTo("jellyfin:alb1")
+        assertThat(page.albums.single().year).isEqualTo("1979")
+        assertThat(page.fallbackArtworkUrl).isEqualTo(page.albums.single().artworkUrl)
+    }
+
+    @Test
+    fun artistPage_keepsRouteNameWhenAlbumsCarryNoArtistIds() = runBlocking {
+        val client = clientServing { """{"Items":[]}""" }
+
+        assertThat(client.artistPage("art", "Route name").getOrThrow().name).isEqualTo("Route name")
+    }
+
+    @Test
+    fun artists_mapToJellyfinArtistIdentity() = runBlocking {
+        var requested = ""
+        val client = clientServing { url ->
+            requested = url
+            """{"Items":[{"Id":"art","Name":"AC/DC","ImageTags":{"Primary":"p"}}]}"""
+        }
+
+        val artist = client.artists().getOrThrow().single()
+
+        assertThat(artist.entityId).isEqualTo("jellyfin:art")
+        assertThat(artist.name).isEqualTo("AC/DC")
+        assertThat(requested).contains("/Artists/AlbumArtists")
+        assertThat(client.search(com.lastwave.app.data.search.SearchTab.ARTISTS, "ac").getOrThrow().single().entityId)
+            .isEqualTo("jellyfin:art")
+        assertThat(requested).contains("searchTerm=ac")
     }
 }

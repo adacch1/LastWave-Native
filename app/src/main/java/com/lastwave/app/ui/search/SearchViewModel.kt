@@ -253,4 +253,4 @@ class SearchViewModel @Inject constructor(
 }
 
 // Tabs the Jellyfin source can serve.
-private val JELLYFIN_TABS = setOf(SearchTab.TRACKS, SearchTab.ALBUMS)
+private val JELLYFIN_TABS = setOf(SearchTab.TRACKS, SearchTab.ARTISTS, SearchTab.ALBUMS)

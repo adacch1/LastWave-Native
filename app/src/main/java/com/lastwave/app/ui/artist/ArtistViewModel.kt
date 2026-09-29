@@ -3,6 +3,7 @@ package com.lastwave.app.ui.artist
 import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.lastwave.app.data.jellyfin.JellyfinClient
 import com.lastwave.app.data.model.ArtistPageData
 import com.lastwave.app.data.repository.ArtistRepository
 import com.lastwave.app.playback.MusicPlayer
@@ -37,6 +38,7 @@ class ArtistViewModel @Inject constructor(
     private val musicPlayer: MusicPlayer,
     private val mixLauncher: MixLauncher,
     private val settingsPreferences: SettingsPreferences,
+    private val jellyfin: JellyfinClient,
 ) : ViewModel() {
 
     val settings: StateFlow<MiscSettings> = settingsPreferences.settings
@@ -62,10 +64,11 @@ class ArtistViewModel @Inject constructor(
         loadJob = viewModelScope.launch {
             _uiState.value = ArtistUiState.Loading
             try {
-                val data = repository.getArtistDetails(artistName, browseId) { initialData ->
-                    coroutineContext.ensureActive()
-                    _uiState.value = ArtistUiState.Success(initialData)
-                }
+                val data = JellyfinClient.itemIdOf(browseId)?.let { jellyfin.artistPage(it, artistName).getOrThrow() }
+                    ?: repository.getArtistDetails(artistName, browseId) { initialData ->
+                        coroutineContext.ensureActive()
+                        _uiState.value = ArtistUiState.Success(initialData)
+                    }
                 coroutineContext.ensureActive()
                 _uiState.value = ArtistUiState.Success(data)
             } catch (e: CancellationException) {
@@ -97,6 +100,8 @@ class ArtistViewModel @Inject constructor(
 
     fun startArtistMix() {
         val state = _uiState.value as? ArtistUiState.Success ?: return
+        // Jellyfin has no radio; shuffle the artist's own tracks instead of asking YouTube.
+        if (JellyfinClient.itemIdOf(state.data.browseId) != null) { playShuffle(); return }
         val artistName = state.data.name
         val topSongs = state.data.topSongs
         val firstTrack = topSongs.firstOrNull()
