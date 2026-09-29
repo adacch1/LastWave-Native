@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import android.support.v4.media.MediaBrowserCompat
 import android.support.v4.media.MediaDescriptionCompat
+import com.lastwave.app.data.jellyfin.JellyfinClient
 import com.lastwave.app.data.local.db.DownloadedTrackDao
 import com.lastwave.app.data.local.db.DownloadedTrackEntity
 import com.lastwave.app.data.playlist.PlaylistRepository
@@ -15,6 +16,7 @@ import com.lastwave.app.data.ytmusic.YtMusicLibraryManager
 import com.lastwave.app.data.generate.youtubeVideoIdOrNull
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.merge
 import java.io.File
@@ -30,6 +32,7 @@ class AndroidAutoMediaLibrary @Inject constructor(
     private val ytMusicLibraryManager: YtMusicLibraryManager,
     private val downloadedTrackDao: DownloadedTrackDao,
     private val searchRepository: SearchRepository,
+    private val jellyfin: JellyfinClient,
 ) {
     private val nextSearchToken = AtomicLong()
     private val searchQueues = object : LinkedHashMap<String, List<PlayableTrack>>(8, 0.75f, true) {
@@ -229,6 +232,11 @@ class AndroidAutoMediaLibrary @Inject constructor(
     private suspend fun searchTracks(query: String): List<PlayableTrack> {
         val cleanQuery = query.trim()
         if (cleanQuery.isEmpty()) return emptyList()
+        if (jellyfin.mode.first()) {
+            return jellyfin.search(SearchTab.TRACKS, cleanQuery).getOrDefault(emptyList())
+                .mapNotNull { it.track }
+                .take(MAX_SEARCH_RESULTS)
+        }
         return searchRepository.search(SearchTab.TRACKS, cleanQuery)
             .asSequence()
             .filter { it.name.isNotBlank() }

@@ -125,8 +125,10 @@ class JellyfinClient @Inject constructor(
                     track = track,
                 )
             }
+            // The album row shows only the subtitle, so it carries "artist · year".
             SearchTab.ALBUMS -> items("MusicAlbum", "searchTerm" to q, "Limit" to "50", "SortBy" to "SortName") { item, conn ->
-                item.toResult(conn)
+                val result = item.toResult(conn)
+                result.copy(subtitle = listOfNotNull(result.artist, result.subtitle).joinToString(" · ").ifBlank { null })
             }
             else -> Result.success(emptyList())
         }

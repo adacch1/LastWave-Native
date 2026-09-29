@@ -3,6 +3,7 @@ package com.lastwave.app.ui.search
 import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.lastwave.app.data.jellyfin.JellyfinClient
 import com.lastwave.app.data.search.SearchHistoryRepository
 import com.lastwave.app.data.search.SearchRepository
 import com.lastwave.app.data.search.SearchResultItem
@@ -15,6 +16,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -30,10 +32,13 @@ data class SearchUiState(
     val suggestions: List<String> = emptyList(),
     val recentSearches: List<String> = emptyList(),
     val isShowingSuggestions: Boolean = false,
+    /** Null until the source mode has loaded; true when Search reads Jellyfin instead of YouTube. */
+    val jellyfin: Boolean? = null,
+    val error: String? = null,
 )
 
 /**
- * YouTube Music & Last.fm search with live auto-complete suggestions,
+ * YouTube Music & Last.fm search (or Jellyfin, in Jellyfin mode) with live auto-complete suggestions,
  * persistent search history, debounced search, and multi-tab results.
  */
 @HiltViewModel
@@ -41,6 +46,7 @@ class SearchViewModel @Inject constructor(
     private val repository: SearchRepository,
     private val historyRepository: SearchHistoryRepository,
     private val musicPlayer: MusicPlayer,
+    private val jellyfinClient: JellyfinClient,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(SearchUiState())
@@ -57,10 +63,27 @@ class SearchViewModel @Inject constructor(
                 _uiState.update { it.copy(recentSearches = history) }
             }
         }
+        // Already deduplicated, so a real change clears stale rows; the query isn't re-run.
+        viewModelScope.launch {
+            jellyfinClient.mode.collect { jf ->
+                _uiState.update { s ->
+                    if (s.jellyfin == null) s.copy(jellyfin = jf)
+                    else s.copy(
+                        jellyfin = jf,
+                        tab = if (s.tab in JELLYFIN_TABS) s.tab else SearchTab.TRACKS,
+                        status = SearchStatus.IDLE,
+                        results = emptyList(),
+                        suggestions = emptyList(),
+                        error = null,
+                        isShowingSuggestions = false,
+                    )
+                }
+            }
+        }
     }
 
     fun setQuery(query: String) {
-        _uiState.update { it.copy(query = query, isShowingSuggestions = query.isNotBlank()) }
+        _uiState.update { it.copy(query = query, isShowingSuggestions = query.isNotBlank() && it.jellyfin == false) }
         debounceJob?.cancel()
         suggestionsJob?.cancel()
 
@@ -76,12 +99,14 @@ class SearchViewModel @Inject constructor(
             return
         }
 
-        // Fast suggestions debounce (120ms)
-        suggestionsJob = viewModelScope.launch {
-            delay(120)
-            val suggestions = repository.getSuggestions(query)
-            if (_uiState.value.query == query) {
-                _uiState.update { it.copy(suggestions = suggestions) }
+        // Fast suggestions debounce (120ms). Skipped outside YouTube mode so typed text never reaches Google.
+        if (_uiState.value.jellyfin == false) {
+            suggestionsJob = viewModelScope.launch {
+                delay(120)
+                val suggestions = repository.getSuggestions(query)
+                if (_uiState.value.query == query) {
+                    _uiState.update { it.copy(suggestions = suggestions) }
+                }
             }
         }
 
@@ -145,6 +170,12 @@ class SearchViewModel @Inject constructor(
 
     fun playResult(item: SearchResultItem) {
         searchQueueJob?.cancel()
+        item.track?.let { t ->
+            val q = _uiState.value.results.mapNotNull { it.track }
+            // Not "Search": MusicPlayer special-cases that label.
+            musicPlayer.playQueue(q, q.indexOf(t).coerceAtLeast(0), sourceLabel = "Jellyfin")
+            return
+        }
         val tab = _uiState.value.tab
         when (tab) {
             SearchTab.TRACKS -> {
@@ -179,16 +210,18 @@ class SearchViewModel @Inject constructor(
 
     private suspend fun runSearch(query: String, saveToHistory: Boolean) {
         val tab = _uiState.value.tab
+        val jf = _uiState.value.jellyfin ?: jellyfinClient.mode.first()
         lastIssuedQuery = query
-        _uiState.update { it.copy(status = SearchStatus.LOADING) }
+        _uiState.update { it.copy(status = SearchStatus.LOADING, error = null) }
         if (saveToHistory) {
             historyRepository.add(query)
         }
         try {
-            val results = repository.search(tab, query)
+            val results = if (jf) jellyfinClient.search(tab, query).getOrThrow() else repository.search(tab, query)
             // Stale-response guard: discard if the user has typed something
-            // new since this call was issued.
-            if (lastIssuedQuery != query || _uiState.value.query != query || _uiState.value.tab != tab) return
+            // new (or the source has changed) since this call was issued.
+            if (lastIssuedQuery != query || _uiState.value.query != query || _uiState.value.tab != tab ||
+                (_uiState.value.jellyfin ?: jf) != jf) return
             _uiState.update {
                 it.copy(
                     status = if (results.isEmpty()) SearchStatus.EMPTY else SearchStatus.RESULTS,
@@ -196,8 +229,11 @@ class SearchViewModel @Inject constructor(
                 )
             }
         } catch (e: Exception) {
-            if (lastIssuedQuery != query || _uiState.value.query != query || _uiState.value.tab != tab) return
-            _uiState.update { it.copy(status = SearchStatus.EMPTY, results = emptyList()) }
+            if (lastIssuedQuery != query || _uiState.value.query != query || _uiState.value.tab != tab ||
+                (_uiState.value.jellyfin ?: jf) != jf) return
+            _uiState.update {
+                it.copy(status = SearchStatus.EMPTY, results = emptyList(), error = if (jf) e.message else null)
+            }
         }
     }
 
@@ -215,3 +251,6 @@ class SearchViewModel @Inject constructor(
         }
     }
 }
+
+// Tabs the Jellyfin source can serve.
+private val JELLYFIN_TABS = setOf(SearchTab.TRACKS, SearchTab.ALBUMS)

@@ -95,6 +95,7 @@ import com.lastwave.app.ui.common.safeDrawingBottomPadding
 import com.lastwave.app.ui.common.safeHorizontalContentPadding
 import com.lastwave.app.ui.common.adaptiveContentWidth
 import com.lastwave.app.ui.player.LocalMiniPlayerScrollClearance
+import com.lastwave.app.playback.PlayableTrack
 
 import androidx.compose.foundation.background
 
@@ -132,6 +133,8 @@ fun SearchScreen(
     val musicPlayer = com.lastwave.app.ui.player.LocalMusicPlayer.current
     val playbackState by musicPlayer.chromeState.collectAsStateWithLifecycle()
     var menuTarget by remember { mutableStateOf<TrackMenuTarget?>(null) }
+    // Jellyfin track behind the open menu; its `jellyfin:` identity keeps YouTube-only rows hidden.
+    var menuTrack by remember { mutableStateOf<PlayableTrack?>(null) }
     // Long-press (deep press) on a TRACKS row opens the mini tray;
     // the overflow button keeps the full sheet.
     var miniTrayItem by remember { mutableStateOf<SearchResultItem?>(null) }
@@ -216,8 +219,12 @@ fun SearchScreen(
                                 ) {
                                     if (state.query.isEmpty()) {
                                         Text(
-                                            text = if (state.tab == SearchTab.USERS) "Search Last.fm users\u2026"
-                                            else "Search YouTube Music\u2026",
+                                            text = when {
+                                                state.jellyfin == null -> ""
+                                                state.jellyfin == true -> "Search your Jellyfin library\u2026"
+                                                state.tab == SearchTab.USERS -> "Search Last.fm users\u2026"
+                                                else -> "Search YouTube Music\u2026"
+                                            },
                                             style = MaterialTheme.typography.bodyMedium,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.74f),
                                             maxLines = 1,
@@ -247,10 +254,13 @@ fun SearchScreen(
                 Spacer(Modifier.height(10.dp))
 
                 // Modern Segmented Filter Pills
-                SearchFilterPills(
-                    selectedTab = state.tab,
-                    onTabSelected = viewModel::setTab,
-                )
+                if (state.jellyfin != null) {
+                    SearchFilterPills(
+                        selectedTab = state.tab,
+                        onTabSelected = viewModel::setTab,
+                        jellyfin = state.jellyfin == true,
+                    )
+                }
             }
         }
 
@@ -415,7 +425,7 @@ fun SearchScreen(
                                         modifier = Modifier.size(44.dp),
                                     )
                                     Spacer(Modifier.height(10.dp))
-                                    Text("No results found for \"${state.query}\"", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text(state.error ?: "No results found for \"${state.query}\"", color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
                             }
                             SearchStatus.RESULTS -> {
@@ -450,10 +460,11 @@ fun SearchScreen(
                                                     if (state.tab == SearchTab.TRACKS) miniTrayItem = topResult
                                                 },
                                                 onMenu = {
+                                                    menuTrack = topResult.track
                                                     menuTarget = when (state.tab) {
                                                         SearchTab.TRACKS -> TrackMenuTarget.Track(topResult.name, topResult.artist.orEmpty(), topResult.url)
-                                                        SearchTab.ARTISTS -> TrackMenuTarget.Artist(topResult.name, topResult.url)
-                                                        SearchTab.ALBUMS -> TrackMenuTarget.Album(topResult.name, topResult.artist.orEmpty(), topResult.url)
+                                                        SearchTab.ARTISTS -> if (state.jellyfin == true) null else TrackMenuTarget.Artist(topResult.name, topResult.url)
+                                                        SearchTab.ALBUMS -> if (state.jellyfin == true) null else TrackMenuTarget.Album(topResult.name, topResult.artist.orEmpty(), topResult.url)
                                                         SearchTab.PLAYLISTS, SearchTab.USERS -> null
                                                     }
                                                 },
@@ -488,11 +499,13 @@ fun SearchScreen(
                                                     miniTrayItem = item
                                                 }
                                             },
+                                            showMenu = state.jellyfin != true || state.tab == SearchTab.TRACKS,
                                             onMenu = {
+                                                menuTrack = item.track
                                                 menuTarget = when (state.tab) {
                                                     SearchTab.TRACKS -> TrackMenuTarget.Track(item.name, item.artist.orEmpty(), item.url)
-                                                    SearchTab.ARTISTS -> TrackMenuTarget.Artist(item.name, item.url)
-                                                    SearchTab.ALBUMS -> TrackMenuTarget.Album(item.name, item.artist.orEmpty(), item.url)
+                                                    SearchTab.ARTISTS -> if (state.jellyfin == true) null else TrackMenuTarget.Artist(item.name, item.url)
+                                                    SearchTab.ALBUMS -> if (state.jellyfin == true) null else TrackMenuTarget.Album(item.name, item.artist.orEmpty(), item.url)
                                                     SearchTab.PLAYLISTS, SearchTab.USERS -> null
                                                 }
                                             },
@@ -512,6 +525,7 @@ fun SearchScreen(
         TrackContextMenuSheet(
             target = target,
             capabilities = TrackMenuCapabilities(showCopyActions = true, showDeleteScrobble = true),
+            playableTrack = menuTrack,
             playbackSourceLabel = "Search",
             onDismiss = { menuTarget = null },
         )
@@ -527,6 +541,7 @@ fun SearchScreen(
                 videoId = item.videoId,
                 sourceLabel = "Search",
                 onPlay = { viewModel.playResult(item) },
+                playable = item.track,
             ),
             onDismiss = { miniTrayItem = null },
         )
@@ -805,6 +820,7 @@ private fun SearchResultRow(
     onLongClick: () -> Unit,
     onMenu: () -> Unit,
     modifier: Modifier = Modifier,
+    showMenu: Boolean = true,
 ) {
     val context = LocalContext.current
     fun openLastFm(path: String) {
@@ -876,7 +892,7 @@ private fun SearchResultRow(
             IconButton(onClick = { openLastFm("/+removefriend") }) {
                 Icon(Icons.Filled.PersonRemove, contentDescription = "Unfollow ${item.name} on Last.fm")
             }
-        } else if (tab != SearchTab.PLAYLISTS) {
+        } else if (tab != SearchTab.PLAYLISTS && showMenu) {
             com.lastwave.app.ui.common.OverflowMenuButton(onClick = onMenu)
         }
     }
@@ -886,15 +902,20 @@ private fun SearchResultRow(
 private fun SearchFilterPills(
     selectedTab: SearchTab,
     onTabSelected: (SearchTab) -> Unit,
+    jellyfin: Boolean,
     modifier: Modifier = Modifier,
 ) {
-    val tabs = listOf(
-        SearchTab.TRACKS to "Tracks",
-        SearchTab.ARTISTS to "Artists",
-        SearchTab.ALBUMS to "Albums",
-        SearchTab.PLAYLISTS to "Playlists",
-        SearchTab.USERS to "Users",
-    )
+    val tabs = if (jellyfin) {
+        listOf(SearchTab.TRACKS to "Tracks", SearchTab.ALBUMS to "Albums")
+    } else {
+        listOf(
+            SearchTab.TRACKS to "Tracks",
+            SearchTab.ARTISTS to "Artists",
+            SearchTab.ALBUMS to "Albums",
+            SearchTab.PLAYLISTS to "Playlists",
+            SearchTab.USERS to "Users",
+        )
+    }
     Row(
         modifier = modifier
             .fillMaxWidth()
