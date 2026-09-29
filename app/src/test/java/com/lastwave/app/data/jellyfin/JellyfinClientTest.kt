@@ -112,6 +112,7 @@ class JellyfinClientTest {
         val prefs = mockk<JellyfinPreferences>()
         every { prefs.connection } returns flowOf(JellyfinConnection("https://jf.example", "user", "me", "tok"))
         every { prefs.mode } returns flowOf(false)
+        every { prefs.preferCopies } returns flowOf(true)
         coEvery { prefs.deviceId() } returns "dev1"
 
         val (url, headers) = JellyfinClient(OkHttpClient(), prefs).streamRequest("abc")!!
@@ -126,6 +127,7 @@ class JellyfinClientTest {
         val prefs = mockk<JellyfinPreferences>()
         every { prefs.connection } returns flowOf(JellyfinConnection.DISCONNECTED)
         every { prefs.mode } returns flowOf(false)
+        every { prefs.preferCopies } returns flowOf(true)
 
         assertThat(JellyfinClient(OkHttpClient(), prefs).streamRequest("abc")).isNull()
     }
@@ -135,6 +137,7 @@ class JellyfinClientTest {
         val prefs = mockk<JellyfinPreferences>()
         every { prefs.connection } returns flowOf(JellyfinConnection("https://jf.example", "user", "me", "tok"))
         every { prefs.mode } returns flowOf(false)
+        every { prefs.preferCopies } returns flowOf(true)
         coEvery { prefs.deviceId() } returns "dev1"
         val http = OkHttpClient.Builder().addInterceptor { chain ->
             val request = chain.request()
