@@ -161,7 +161,7 @@ class JellyfinClient @Inject constructor(
     suspend fun playlists(): Result<List<SearchResultItem>> =
         items("Playlist", "MediaTypes" to "Audio", "SortBy" to "SortName", "Limit" to "200", "Fields" to "ChildCount") { item, conn ->
             item.toResult(conn, ref = ID_PREFIX + PLAYLIST_REF + item.id)
-                .copy(subtitle = item.childCount?.let { "$it tracks" })
+                .copy(subtitle = item.childCount?.let { if (it == 1) "1 track" else "$it tracks" })
         }
 
     /** Album or playlist page for a `jellyfin:` ref (the id without the prefix; playlists start with [PLAYLIST_REF]). */
@@ -189,7 +189,7 @@ class JellyfinClient @Inject constructor(
                 artworkUrl = head?.second?.artworkUrl ?: "$server/Items/$id/Images/Primary?maxHeight=544",
                 artistBrowseId = if (isPlaylist) null else head?.first?.albumArtists?.firstOrNull()?.id?.let { ID_PREFIX + it },
                 releaseYear = if (isPlaylist) null else head?.first?.productionYear?.toString(),
-                trackCountText = "${rows.size} tracks",
+                trackCountText = if (rows.size == 1) "1 track" else "${rows.size} tracks",
                 tracks = rows.map { it.second },
             )
         }

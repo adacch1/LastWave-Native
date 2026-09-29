@@ -138,10 +138,7 @@ class YtMusicSyncManager @Inject constructor(
             // playlist. Selective-sync users opt in via the sync picker.
             val allPlaylists = playlistRepository.getAll().filterNot { it.remotePlaylistId != null }
             val syncedIds = preferences.syncedPlaylistIds.first()
-            // Jellyfin-only playlists (incl. an all-Jellyfin Liked Songs) never mirror or leak their title.
-            // Filtered here, not on allPlaylists, so orphan detection still sees them and keeps an existing mirror.
-            val playlists = (if (syncedIds != null) allPlaylists.filter { it.id in syncedIds } else allPlaylists)
-                .filterNot { p -> p.tracks.isNotEmpty() && p.tracks.all { JellyfinClient.itemIdOf(it.url) != null } }
+            val playlists = if (syncedIds != null) allPlaylists.filter { it.id in syncedIds } else allPlaylists
 
             if (playlists.isEmpty()) {
                 _state.value = YtSyncState.Completed(System.currentTimeMillis(), 0, 0, 0)
@@ -175,6 +172,9 @@ class YtMusicSyncManager @Inject constructor(
             var authFailure = false
             playlists.forEachIndexed { index, playlist ->
                 if (authFailure) return@forEachIndexed
+                // Jellyfin-only playlists (incl. an all-Jellyfin Liked Songs) never mirror or leak their title.
+                // Skipped here, not filtered above, so they can't short-circuit orphan deletion.
+                if (playlist.tracks.isNotEmpty() && playlist.tracks.all { JellyfinClient.itemIdOf(it.url) != null }) return@forEachIndexed
                 _state.value = YtSyncState.Running(index + 1, playlists.size, playlist.title)
                 try {
                     unmatchedTotal += reconcile(playlist, mappings)

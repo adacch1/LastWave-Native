@@ -304,7 +304,7 @@ fun MainShell(
                         onOpenFriends = onOpenFriends,
                         onOpenDownloads = onOpenDownloads,
                     )
-                    // Waits for the mode so the ViewModel's first load() can't refresh YouTube in Jellyfin mode.
+                    // Waits for the mode so YouTube-account playlists never flash in Jellyfin mode.
                     MainTab.PLAYLISTS -> if (jfMode == null) Unit else PlaylistScreen(onOpenPlaylist = onOpenPlaylist, jellyfinMode = jfMode == true)
                 }
             }
