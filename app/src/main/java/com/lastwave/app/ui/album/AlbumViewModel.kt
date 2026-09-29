@@ -4,6 +4,7 @@ import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.lastwave.app.data.generate.GeneratedTrack
+import com.lastwave.app.data.jellyfin.JellyfinClient
 import com.lastwave.app.data.model.AlbumPageData
 import com.lastwave.app.data.playlist.PlaylistRepository
 import com.lastwave.app.data.playlist.SavedPlaylist
@@ -40,6 +41,7 @@ data class AlbumSaveUiState(
 @HiltViewModel
 class AlbumViewModel @Inject constructor(
     private val repository: AlbumRepository,
+    private val jellyfin: JellyfinClient,
     private val playlistRepository: PlaylistRepository,
     private val musicPlayer: MusicPlayer,
     private val settingsPreferences: SettingsPreferences,
@@ -72,10 +74,15 @@ class AlbumViewModel @Inject constructor(
         loadJob = viewModelScope.launch {
             _uiState.value = AlbumUiState.Loading
             try {
-                val data = repository.getAlbumDetails(albumTitle, artistName, browseId) { initialData ->
-                    coroutineContext.ensureActive()
-                    _uiState.value = AlbumUiState.Success(initialData)
-                    viewModelScope.launch { refreshSavedState(initialData) }
+                val ref = JellyfinClient.itemIdOf(browseId)
+                val data = if (ref != null) {
+                    jellyfin.albumPage(ref, albumTitle, artistName).getOrThrow()
+                } else {
+                    repository.getAlbumDetails(albumTitle, artistName, browseId) { initialData ->
+                        coroutineContext.ensureActive()
+                        _uiState.value = AlbumUiState.Success(initialData)
+                        viewModelScope.launch { refreshSavedState(initialData) }
+                    }
                 }
                 coroutineContext.ensureActive()
                 _uiState.value = AlbumUiState.Success(data)
@@ -155,7 +162,7 @@ class AlbumViewModel @Inject constructor(
                 if (existing == null || !isAlbumCopy(existing, tracks)) {
                     playlistRepository.save(
                         title = data.title.ifBlank { "Album" },
-                        subtitle = "${data.artist.ifBlank { "YouTube Music" }} • ${tracks.size} tracks",
+                        subtitle = "${data.artist.ifBlank { if (JellyfinClient.itemIdOf(data.browseId) != null) "Jellyfin" else "YouTube Music" }} • ${tracks.size} tracks",
                         mode = "custom",
                         tracks = tracks,
                     )

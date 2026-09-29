@@ -79,6 +79,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.lastwave.app.data.jellyfin.JellyfinClient
 import com.lastwave.app.data.model.ArtistAlbumItem
 import com.lastwave.app.playback.PlayableTrack
 import com.lastwave.app.ui.common.ArtworkImage
@@ -256,8 +257,11 @@ fun AlbumDetailScreen(
                             Spacer(Modifier.height(6.dp))
 
                             // Clickable Artist Link(s)
-                            val splitArtists = remember(data.artist) {
-                                com.lastwave.app.util.ArtistHelper.splitArtists(data.artist)
+                            // Jellyfin names come from the server unsplit ("AC/DC" is one artist).
+                            val jf = JellyfinClient.itemIdOf(data.browseId) != null
+                            val splitArtists = remember(data.artist, jf) {
+                                if (jf) listOfNotNull(data.artist.takeIf { it.isNotBlank() })
+                                else com.lastwave.app.util.ArtistHelper.splitArtists(data.artist)
                             }
                             androidx.compose.foundation.layout.FlowRow(
                                 horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
@@ -267,7 +271,8 @@ fun AlbumDetailScreen(
                                     Surface(
                                         onClick = {
                                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                            onOpenArtist(artName, if (splitArtists.size == 1) data.artistBrowseId else null)
+                                            if (jf) data.artistBrowseId?.let { onOpenArtist(artName, it) }
+                                            else onOpenArtist(artName, if (splitArtists.size == 1) data.artistBrowseId else null)
                                         },
                                         shape = RoundedCornerShape(12.dp),
                                         color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f),
