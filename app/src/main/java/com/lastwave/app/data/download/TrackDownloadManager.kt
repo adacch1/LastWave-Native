@@ -2014,7 +2014,7 @@ class TrackDownloadManager @Inject constructor(
             val endNumber = startNumber + segmentCount - 1
             for (segIndex in startNumber..endNumber) {
                 currentCoroutineContext().ensureActive()
-                val segUrl = mediaTemplate.replace(Regex("""\$Number(?:%0(\d+)d)?\$""")) { m ->
+                val segUrl = mediaTemplate.replace(Regex("""\${'$'}Number(?:%0(\d+)d)?\${'$'}""")) { m ->
                     val pad = m.groupValues.getOrNull(1)?.toIntOrNull()
                     if (pad != null) segIndex.toString().padStart(pad, '0') else segIndex.toString()
                 }
