@@ -7,6 +7,7 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import com.lastwave.app.data.generate.GeneratedTrack
 import com.lastwave.app.data.generate.youtubeVideoIdOrNull
+import com.lastwave.app.data.jellyfin.JellyfinClient
 import com.lastwave.app.data.model.ArtistRef
 import com.lastwave.app.data.model.ImageDto
 import com.lastwave.app.data.generate.TasteProfileProvider
@@ -162,6 +163,7 @@ class FeedRepository @Inject constructor(
                 val liked = playlistRepository.getLikedSongs()?.tracks.orEmpty()
                 val saved = playlistRepository.getAll().flatMap { it.tracks }
                 (liked + saved).filter { it.name.isNotBlank() && it.artist.isNotBlank() }
+                    .filter { JellyfinClient.itemIdOf(it.url) == null }
                     .distinctBy { it.key }
             }.getOrDefault(emptyList())
         }

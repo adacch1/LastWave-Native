@@ -88,6 +88,7 @@ import androidx.lifecycle.viewModelScope
 import com.lastwave.app.ui.generate.MixLauncher
 import com.lastwave.app.ui.theme.LocalLiquidGlass
 import com.lastwave.app.ui.theme.liquidGlassChrome
+import com.lastwave.app.data.jellyfin.JellyfinClient
 import com.lastwave.app.playback.PlayableTrack
 import com.lastwave.app.ui.navigation.ArtistAlbumNavigator
 import com.lastwave.app.ui.player.LocalMusicPlayer
@@ -236,7 +237,7 @@ private fun openUrl(context: Context, url: String) {
 
 private fun buildLastFmUrl(target: TrackMenuTarget): String {
     return when (target) {
-        is TrackMenuTarget.Track -> if (target.url.isNotBlank()) target.url else try {
+        is TrackMenuTarget.Track -> if (target.url.isNotBlank() && JellyfinClient.itemIdOf(target.url) == null) target.url else try {
             "https://www.last.fm/music/${java.net.URLEncoder.encode(target.artist, "UTF-8")}/_/${java.net.URLEncoder.encode(target.name, "UTF-8")}"
         } catch (e: Exception) { "" }
         is TrackMenuTarget.Artist -> if (target.url.isNotBlank()) target.url else try {

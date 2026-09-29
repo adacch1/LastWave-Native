@@ -446,6 +446,7 @@ fun PlaylistScreen(
         TrackContextMenuSheet(
             target = TrackMenuTarget.Track(track.name, track.artist, track.url),
             capabilities = TrackMenuCapabilities(showCopyActions = true, showDeleteScrobble = true),
+            playableTrack = track.toPlayableTrack(),
             playbackSourceLabel = state.playlists.firstOrNull { it.id == playlistId }?.title ?: "Playlists",
             onDismiss = { menuTarget = null },
             onDeleteScrobble = { name, artist -> viewModel.deleteScrobble(name, artist) },

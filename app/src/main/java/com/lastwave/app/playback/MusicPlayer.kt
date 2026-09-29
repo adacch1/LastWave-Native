@@ -6364,6 +6364,9 @@ private fun MediaItem.toPlayableTrack(): PlayableTrack {
 }
 
 fun GeneratedTrack.toPlayableTrack(): PlayableTrack {
+    if (JellyfinClient.itemIdOf(url) != null) {
+        return PlayableTrack(title = name, artist = artist, album = album, artworkUrl = artworkUrl, playbackUrl = url)
+    }
     val videoId = youtubeVideoIdOrNull()
     return PlayableTrack(
         title = name,
@@ -6373,6 +6376,16 @@ fun GeneratedTrack.toPlayableTrack(): PlayableTrack {
         videoId = videoId,
     )
 }
+
+/** Jellyfin tracks keep their `jellyfin:<id>` identity so saved copies replay from Jellyfin. */
+fun PlayableTrack.toGeneratedTrack() = GeneratedTrack(
+    name = title,
+    artist = artist,
+    artworkUrl = artworkUrl,
+    album = album,
+    url = playbackUrl?.takeIf { JellyfinClient.itemIdOf(it) != null }
+        ?: videoId?.let { "https://music.youtube.com/watch?v=$it" }.orEmpty(),
+)
 
 private fun PlayableTrack.queueKey(): String = "$title|$artist".lowercase()
 

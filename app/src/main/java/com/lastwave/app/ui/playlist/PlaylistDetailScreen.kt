@@ -1357,6 +1357,7 @@ fun PlaylistDetailScreen(
         TrackContextMenuSheet(
             target = TrackMenuTarget.Track(track.name, track.artist, track.url),
             capabilities = TrackMenuCapabilities(showCopyActions = true, showDeleteScrobble = true),
+            playableTrack = track.toPlayableTrack(),
             playbackSourceLabel = playlist.title,
             onDismiss = { menuTarget = null },
             onRemoveFromPlaylist = {

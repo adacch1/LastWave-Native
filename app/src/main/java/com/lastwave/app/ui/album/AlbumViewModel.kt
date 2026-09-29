@@ -9,7 +9,7 @@ import com.lastwave.app.data.playlist.PlaylistRepository
 import com.lastwave.app.data.playlist.SavedPlaylist
 import com.lastwave.app.data.repository.AlbumRepository
 import com.lastwave.app.playback.MusicPlayer
-import com.lastwave.app.playback.PlayableTrack
+import com.lastwave.app.playback.toGeneratedTrack
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -168,12 +168,4 @@ class AlbumViewModel @Inject constructor(
             }
         }
     }
-
-    private fun PlayableTrack.toGeneratedTrack() = GeneratedTrack(
-        name = title,
-        artist = artist,
-        artworkUrl = artworkUrl,
-        album = album,
-        url = videoId?.let { "https://music.youtube.com/watch?v=$it" }.orEmpty(),
-    )
 }

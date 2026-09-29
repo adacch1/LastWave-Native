@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.lastwave.app.data.artwork.ArtworkRepository
 import com.lastwave.app.data.generate.GenerateRepository
 import com.lastwave.app.data.generate.GeneratedTrack
+import com.lastwave.app.data.jellyfin.JellyfinClient
 import com.lastwave.app.data.generate.RECOMMENDATION_TRACK_COUNT
 import com.lastwave.app.data.naming.PlaylistNamer
 import com.lastwave.app.data.playlist.PlaylistRepository
@@ -513,7 +514,7 @@ class PlaylistViewModel @Inject constructor(
                 _uiState.update { it.copy(toastMessage = "Playlist could not be loaded") }
                 return@launch
             }
-            var tracks = playlist.tracks
+            var tracks = playlist.tracks.filterNot { JellyfinClient.itemIdOf(it.url) != null }
             if (tracks.isEmpty() && playlist.isYouTubeOnly) {
                 val refreshed = runCatching { ytMusicLibraryManager.loadDetail(playlistId) }.getOrNull()
                 if (refreshed != null && refreshed.tracks.isNotEmpty()) {
