@@ -14,6 +14,7 @@ import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Contrast
 import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.FormatListBulleted
@@ -764,6 +765,27 @@ object SettingsSearchIndex {
                     iconTint = { MaterialTheme.colorScheme.onSecondaryContainer },
                     parentTab = SettingsTab.LAST_FM,
                     section = "Integrations / Scrobbling",
+                    type = EntryType.ACTION,
+                )
+            )
+
+            // ==========================================
+            // TAB: JELLYFIN
+            // ==========================================
+            add(
+                SettingsEntry(
+                    id = "jellyfin.connect",
+                    title = "Jellyfin Server Connection",
+                    subtitle = "Sign in to your own Jellyfin media server to stream your library",
+                    keywords = listOf(
+                        "jellyfin", "media server", "self-hosted", "server", "home server",
+                        "connect jellyfin", "login jellyfin", "own music", "library"
+                    ),
+                    icon = Icons.Filled.Dns,
+                    iconContainer = { MaterialTheme.colorScheme.tertiaryContainer },
+                    iconTint = { MaterialTheme.colorScheme.onTertiaryContainer },
+                    parentTab = SettingsTab.JELLYFIN,
+                    section = "Jellyfin Server",
                     type = EntryType.ACTION,
                 )
             )

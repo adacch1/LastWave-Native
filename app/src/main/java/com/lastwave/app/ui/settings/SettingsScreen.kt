@@ -82,6 +82,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForwardIos
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Album
+import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Backup
 import androidx.compose.material.icons.filled.Bolt
@@ -388,6 +389,11 @@ enum class SettingsTab(
         subtitle = "Account connection, Scrobbling sync & API credentials",
         icon = Icons.Filled.Album,
     ),
+    JELLYFIN(
+        title = "Jellyfin",
+        subtitle = "Connect your own media server for streaming",
+        icon = Icons.Filled.Dns,
+    ),
     LIBRARY(
         title = "Library & Content",
         subtitle = "Home layout, Playlist imports, Downloads, Exclusions",
@@ -445,6 +451,8 @@ fun SettingsScreen(
     val hasApiKey by viewModel.hasApiKey.collectAsStateWithLifecycle()
     val lastFmAuthUrl by viewModel.lastFmAuthUrl.collectAsStateWithLifecycle()
     val lastFmConnecting by viewModel.lastFmConnecting.collectAsStateWithLifecycle()
+    val jellyfinConnection by viewModel.jellyfinConnection.collectAsStateWithLifecycle()
+    val jellyfinConnecting by viewModel.jellyfinConnecting.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
     // Last.fm web auth (Settings → Integrations): open the auth URL in Custom
@@ -650,7 +658,7 @@ fun SettingsScreen(
                         item {
                             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                                 SectionLabel("Services & Addons")
-                                SettingsGroup(rowCount = 3) { index, position ->
+                                SettingsGroup(rowCount = 4) { index, position ->
                                     when (index) {
                                         0 -> SettingsActionCard(
                                             icon = Icons.Filled.Extension,
@@ -670,13 +678,22 @@ fun SettingsScreen(
                                             onClick = { activeTab = SettingsTab.LAST_FM },
                                             position = position,
                                         )
-                                        else -> SettingsActionCard(
+                                        2 -> SettingsActionCard(
                                             icon = Icons.Filled.CloudSync,
                                             iconContainer = MaterialTheme.colorScheme.secondaryContainer,
                                             iconTint = MaterialTheme.colorScheme.onSecondaryContainer,
                                             title = "YouTube & Sync",
                                             subtitle = if (ytConnection.isConnected) "Connected as ${ytConnection.accountName} \u2022 24/7 sync" else "Connect account, 24/7 playlist sync, channels",
                                             onClick = { activeTab = SettingsTab.YOUTUBE },
+                                            position = position,
+                                        )
+                                        else -> SettingsActionCard(
+                                            icon = Icons.Filled.Dns,
+                                            iconContainer = MaterialTheme.colorScheme.tertiaryContainer,
+                                            iconTint = MaterialTheme.colorScheme.onTertiaryContainer,
+                                            title = "Jellyfin",
+                                            subtitle = if (jellyfinConnection.isConnected) "Connected as ${jellyfinConnection.userName}" else "Stream from your own media server",
+                                            onClick = { activeTab = SettingsTab.JELLYFIN },
                                             position = position,
                                         )
                                     }
@@ -1447,6 +1464,21 @@ fun SettingsScreen(
                     )
                 }
             }
+                    }
+
+                    SettingsTab.JELLYFIN -> {
+                        item {
+                            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                SectionLabel("Jellyfin Server")
+                                JellyfinIntegrationCard(
+                                    connection = jellyfinConnection,
+                                    connecting = jellyfinConnecting,
+                                    onConnect = viewModel::connectJellyfin,
+                                    onDisconnect = viewModel::disconnectJellyfin,
+                                    isHighlighted = (highlightedSettingId == "jellyfin.connect"),
+                                )
+                            }
+                        }
                     }
 
 
@@ -3330,6 +3362,153 @@ private fun LastFmIntegrationCard(
             onDismissRequest = { showDisconnectConfirm = false },
             title = { Text("Disconnect Last.fm?") },
             text = { Text("Global scrobbles pause. Your Stats switch to local listening history — nothing is deleted.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showDisconnectConfirm = false
+                    onDisconnect()
+                }) { Text("Disconnect") }
+            },
+            dismissButton = { TextButton(onClick = { showDisconnectConfirm = false }) { Text("Cancel") } },
+        )
+    }
+}
+
+@Composable
+private fun JellyfinIntegrationCard(
+    connection: com.lastwave.app.data.jellyfin.JellyfinConnection,
+    connecting: Boolean,
+    onConnect: (serverUrl: String, username: String, password: String) -> Unit,
+    onDisconnect: () -> Unit,
+    isHighlighted: Boolean = false,
+) {
+    var showDisconnectConfirm by remember { mutableStateOf(false) }
+    // Prefill the last server so reconnecting only needs credentials.
+    var serverInput by remember(connection.serverUrl) { mutableStateOf(connection.serverUrl) }
+    var usernameInput by remember { mutableStateOf("") }
+    var passwordInput by remember { mutableStateOf("") }
+
+    Card(
+        shape = CardOuterShape,
+        colors = CardDefaults.cardColors(
+            containerColor = if (isHighlighted) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.25f) else MaterialTheme.colorScheme.surfaceContainerHigh
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .animateContentSize()
+            .settingHighlightGlow(isHighlighted = isHighlighted, shape = CardOuterShape),
+    ) {
+        Column(
+            Modifier.fillMaxWidth().padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                IconBadge(
+                    Icons.Filled.Dns,
+                    MaterialTheme.colorScheme.tertiaryContainer,
+                    MaterialTheme.colorScheme.onTertiaryContainer,
+                )
+                Spacer(Modifier.width(14.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        "Jellyfin",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        if (connection.isConnected) connection.userName else "Not connected",
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    )
+                    if (connection.isConnected) {
+                        Text(
+                            connection.serverUrl,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+                if (connection.isConnected) {
+                    Spacer(Modifier.width(8.dp))
+                    FilledTonalIconButton(
+                        onClick = { showDisconnectConfirm = true },
+                        colors = IconButtonDefaults.filledTonalIconButtonColors(
+                            containerColor = MaterialTheme.colorScheme.errorContainer,
+                            contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                        ),
+                    ) {
+                        Icon(Icons.Filled.Logout, contentDescription = "Disconnect")
+                    }
+                }
+            }
+
+            if (!connection.isConnected) {
+                androidx.compose.material3.OutlinedTextField(
+                    value = serverInput,
+                    onValueChange = { serverInput = it.trim() },
+                    label = { Text("Server address") },
+                    placeholder = { Text("https://jellyfin.example.com") },
+                    singleLine = true,
+                    enabled = !connecting,
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                        keyboardType = androidx.compose.ui.text.input.KeyboardType.Uri,
+                    ),
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                androidx.compose.material3.OutlinedTextField(
+                    value = usernameInput,
+                    onValueChange = { usernameInput = it },
+                    label = { Text("Username") },
+                    singleLine = true,
+                    enabled = !connecting,
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                androidx.compose.material3.OutlinedTextField(
+                    value = passwordInput,
+                    onValueChange = { passwordInput = it },
+                    label = { Text("Password") },
+                    singleLine = true,
+                    enabled = !connecting,
+                    visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                        keyboardType = androidx.compose.ui.text.input.KeyboardType.Password,
+                    ),
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                if (connecting) {
+                    com.lastwave.app.ui.common.ExpressiveLoadingIndicator(message = "Connecting to Jellyfin…")
+                } else {
+                    Button(
+                        onClick = {
+                            onConnect(serverInput, usernameInput, passwordInput)
+                            passwordInput = ""
+                        },
+                        enabled = serverInput.isNotBlank() && usernameInput.isNotBlank(),
+                        shape = ExpressivePillShape,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("Connect") }
+                    Text(
+                        "LastWave stores a sign-in token from your server, never your password.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+    }
+
+    if (showDisconnectConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDisconnectConfirm = false },
+            title = { Text("Disconnect Jellyfin?") },
+            text = { Text("LastWave signs out of your server. Your library on the server isn't changed.") },
             confirmButton = {
                 TextButton(onClick = {
                     showDisconnectConfirm = false
