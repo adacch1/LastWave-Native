@@ -76,6 +76,7 @@ class LaunchGateViewModel @Inject constructor(
     authRepository: com.lastwave.app.data.repository.AuthRepository,
     sessionPreferences: com.lastwave.app.data.local.SessionPreferences,
     ytAuthManager: com.lastwave.app.data.ytmusic.YtMusicAuthManager,
+    jellyfinClient: com.lastwave.app.data.jellyfin.JellyfinClient,
 ) : ViewModel() {
     sealed interface GateTarget {
         data object Loading : GateTarget
@@ -89,7 +90,8 @@ class LaunchGateViewModel @Inject constructor(
             sessionPreferences.session,
             sessionPreferences.guestMode,
             ytAuthManager.connection,
-        ) { authState, session, guestMode, ytConnection ->
+            jellyfinClient.connection,
+        ) { authState, session, guestMode, ytConnection, jellyfinConnection ->
             // Wait for DataStore to load before deciding; otherwise every
             // cold start would flash Login.
             if (!session.isLoaded) {
@@ -100,7 +102,7 @@ class LaunchGateViewModel @Inject constructor(
                 GateTarget.MainShell
             } else if (guestMode) {
                 GateTarget.MainShell
-            } else if (ytConnection.isConnected) {
+            } else if (ytConnection.isConnected || jellyfinConnection.isConnected) {
                 GateTarget.MainShell
             } else {
                 GateTarget.Login
@@ -233,6 +235,9 @@ fun LastWaveNavHost(
             LoginScreen(
                 onLoginWithYouTube = {
                     navController.navigate(Screen.YouTubeLogin.route)
+                },
+                onConnectJellyfin = {
+                    navController.navigate(Screen.JellyfinLogin.route)
                 },
                 onContinueAsGuest = {
                     authViewModel.continueAsGuest()
@@ -420,6 +425,15 @@ fun LastWaveNavHost(
         composable(Screen.YouTubeLogin.route) {
             PredictiveBackScreen(onBack = { navController.popBackStack() }) {
                 com.lastwave.app.ui.settings.YouTubeLoginScreen(
+                    onBack = { navController.popBackStack() },
+                    onConnected = { navController.popBackStack() },
+                )
+            }
+        }
+
+        composable(Screen.JellyfinLogin.route) {
+            PredictiveBackScreen(onBack = { navController.popBackStack() }) {
+                com.lastwave.app.ui.settings.JellyfinLoginScreen(
                     onBack = { navController.popBackStack() },
                     onConnected = { navController.popBackStack() },
                 )

@@ -451,8 +451,10 @@ fun SettingsScreen(
     val hasApiKey by viewModel.hasApiKey.collectAsStateWithLifecycle()
     val lastFmAuthUrl by viewModel.lastFmAuthUrl.collectAsStateWithLifecycle()
     val lastFmConnecting by viewModel.lastFmConnecting.collectAsStateWithLifecycle()
-    val jellyfinConnection by viewModel.jellyfinConnection.collectAsStateWithLifecycle()
-    val jellyfinConnecting by viewModel.jellyfinConnecting.collectAsStateWithLifecycle()
+    val jellyfinViewModel: JellyfinLoginViewModel = hiltViewModel()
+    val jellyfinConnection by jellyfinViewModel.connection.collectAsStateWithLifecycle()
+    val jellyfinConnecting by jellyfinViewModel.connecting.collectAsStateWithLifecycle()
+    val jellyfinError by jellyfinViewModel.error.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
     // Last.fm web auth (Settings → Integrations): open the auth URL in Custom
@@ -1473,8 +1475,9 @@ fun SettingsScreen(
                                 JellyfinIntegrationCard(
                                     connection = jellyfinConnection,
                                     connecting = jellyfinConnecting,
-                                    onConnect = viewModel::connectJellyfin,
-                                    onDisconnect = viewModel::disconnectJellyfin,
+                                    error = jellyfinError,
+                                    onConnect = jellyfinViewModel::connect,
+                                    onDisconnect = jellyfinViewModel::disconnect,
                                     isHighlighted = (highlightedSettingId == "jellyfin.connect"),
                                 )
                             }
@@ -3374,9 +3377,10 @@ private fun LastFmIntegrationCard(
 }
 
 @Composable
-private fun JellyfinIntegrationCard(
+internal fun JellyfinIntegrationCard(
     connection: com.lastwave.app.data.jellyfin.JellyfinConnection,
     connecting: Boolean,
+    error: String?,
     onConnect: (serverUrl: String, username: String, password: String) -> Unit,
     onDisconnect: () -> Unit,
     isHighlighted: Boolean = false,
@@ -3500,6 +3504,13 @@ private fun JellyfinIntegrationCard(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
+            }
+            if (error != null) {
+                Text(
+                    error,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
             }
         }
     }

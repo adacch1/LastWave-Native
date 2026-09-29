@@ -97,7 +97,6 @@ class SettingsViewModel @Inject constructor(
     private val ytMusicSyncManager: com.lastwave.app.data.ytmusic.YtMusicSyncManager,
     private val ytMusicPreferences: com.lastwave.app.data.ytmusic.YtMusicPreferences,
     private val ytMusicLibraryManager: com.lastwave.app.data.ytmusic.YtMusicLibraryManager,
-    private val jellyfinClient: com.lastwave.app.data.jellyfin.JellyfinClient,
     private val downloadedTrackDao: com.lastwave.app.data.local.db.DownloadedTrackDao,
     private val appLocaleManager: com.lastwave.app.util.AppLocaleManager,
     val playlistImportManager: com.lastwave.app.data.playlist.PlaylistImportManager,
@@ -136,40 +135,6 @@ class SettingsViewModel @Inject constructor(
     val ytChannels: StateFlow<List<com.lastwave.app.data.music.YtChannelOption>> = _ytChannels.asStateFlow()
     private val _ytChannelsLoading = MutableStateFlow(false)
     val ytChannelsLoading: StateFlow<Boolean> = _ytChannelsLoading.asStateFlow()
-
-    /** Jellyfin server connection (§ Jellyfin). */
-    val jellyfinConnection: StateFlow<com.lastwave.app.data.jellyfin.JellyfinConnection> = jellyfinClient.connection
-        .withSettingsFallback("Jellyfin connection", com.lastwave.app.data.jellyfin.JellyfinConnection.DISCONNECTED)
-        .stateIn(viewModelScope, SettingsSharing, com.lastwave.app.data.jellyfin.JellyfinConnection.DISCONNECTED)
-    private val _jellyfinConnecting = MutableStateFlow(false)
-    val jellyfinConnecting: StateFlow<Boolean> = _jellyfinConnecting.asStateFlow()
-
-    fun connectJellyfin(serverUrl: String, username: String, password: String) {
-        if (_jellyfinConnecting.value) return
-        _jellyfinConnecting.value = true
-        viewModelScope.launch {
-            try {
-                jellyfinClient.login(serverUrl, username, password)
-                    .onSuccess { conn ->
-                        _uiState.update { it.copy(toastMessage = "Connected to Jellyfin as ${conn.userName}") }
-                    }
-                    .onFailure { error ->
-                        if (error is CancellationException) throw error
-                        android.util.Log.e(SETTINGS_TAG, "Jellyfin login failed", error)
-                        _uiState.update { it.copy(toastMessage = error.message ?: "Couldn't connect to Jellyfin") }
-                    }
-            } finally {
-                _jellyfinConnecting.value = false
-            }
-        }
-    }
-
-    fun disconnectJellyfin() {
-        launchSettingsAction("disconnect Jellyfin") {
-            jellyfinClient.logout()
-            _uiState.update { it.copy(toastMessage = "Jellyfin disconnected") }
-        }
-    }
     val allPlaylists: StateFlow<List<com.lastwave.app.data.playlist.SavedPlaylist>> = playlistRepository.playlists
         .map { playlists -> playlists }
         .withSettingsFallback("playlists", emptyList())

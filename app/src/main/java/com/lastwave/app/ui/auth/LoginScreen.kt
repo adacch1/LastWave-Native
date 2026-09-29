@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CloudDownload
+import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PersonOutline
@@ -45,12 +46,14 @@ import com.lastwave.app.ui.theme.ExpressivePillShape
 /**
  * YouTube Music-first onboarding.
  *
- * First launch shows exactly two primary options:
+ * First launch shows these primary options:
  *  1. "Login with YouTube Music" — launches the existing YouTube Music web
  *     login flow (YouTubeLoginScreen / YtMusicAuthManager) to capture
  *     authentication cookies. Upon success the caller navigates to MainShell.
  *  2. "Continue as Guest" — persists guest mode (account-free) and enters
  *     MainShell immediately with local-first recommendations.
+ *  3. "Connect Jellyfin server" — opens JellyfinLoginScreen; a stored
+ *     Jellyfin session counts as onboarded, like a YouTube Music connection.
  *
  * Last.fm is intentionally NOT part of this path anymore. It lives in
  * Settings → Integrations / Scrobbling and is fully optional.
@@ -59,6 +62,7 @@ import com.lastwave.app.ui.theme.ExpressivePillShape
 fun LoginScreen(
     onLoginWithYouTube: () -> Unit,
     onContinueAsGuest: () -> Unit,
+    onConnectJellyfin: () -> Unit = {},
     onRestoreBackupAndSignIn: ((String) -> Unit)? = null,
     onDismissError: (() -> Unit)? = null,
     errorMessage: String? = null,
@@ -131,6 +135,22 @@ fun LoginScreen(
                         modifier = Modifier.padding(end = 8.dp),
                     )
                     Text("Login with YouTube Music")
+                }
+                Spacer(Modifier.height(12.dp))
+
+                // Jellyfin: stream from the user's own media server.
+                OutlinedButton(
+                    onClick = onConnectJellyfin,
+                    enabled = !isBusy,
+                    shape = ExpressivePillShape,
+                    modifier = Modifier.fillMaxWidth().height(52.dp),
+                ) {
+                    Icon(
+                        Icons.Filled.Dns,
+                        contentDescription = null,
+                        modifier = Modifier.padding(end = 8.dp),
+                    )
+                    Text("Connect Jellyfin server")
                 }
                 Spacer(Modifier.height(12.dp))
 
