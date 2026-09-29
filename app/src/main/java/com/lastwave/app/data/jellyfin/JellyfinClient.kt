@@ -2,6 +2,9 @@ package com.lastwave.app.data.jellyfin
 
 import android.os.Build
 import com.lastwave.app.BuildConfig
+import com.lastwave.app.data.model.AlbumPageData
+import com.lastwave.app.data.search.SearchResultItem
+import com.lastwave.app.data.search.SearchTab
 import com.lastwave.app.playback.PlayableTrack
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
@@ -15,14 +18,15 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
 
 class JellyfinException(message: String) : Exception(message)
 
 /**
- * Minimal Jellyfin REST client (server 10.9+): sign-in, track search and
- * album tracks. Results map straight to [PlayableTrack] with a direct
+ * Minimal Jellyfin REST client (server 10.9+): sign-in, search, browse queries
+ * and stream requests. Results map straight to [PlayableTrack] with a direct
  * `playbackUrl`, so the player streams them without the YouTube resolver.
  */
 @Singleton
@@ -30,7 +34,13 @@ class JellyfinClient @Inject constructor(
     private val client: OkHttpClient,
     private val preferences: JellyfinPreferences,
 ) {
+    // ponytail: LAN server; raise if remote servers are slow
+    private val http = client.newBuilder().connectTimeout(5, TimeUnit.SECONDS).build()
+
     val connection = preferences.connection
+    val mode = preferences.mode
+
+    suspend fun setMode(on: Boolean) = preferences.setMode(on)
 
     /** Signs in and stores the session. The password is never persisted. */
     suspend fun login(rawServerUrl: String, username: String, password: String): Result<JellyfinConnection> =
@@ -65,33 +75,98 @@ class JellyfinClient @Inject constructor(
                     .header("Authorization", authorizationHeader(conn.accessToken))
                     .post(ByteArray(0).toRequestBody())
                     .build()
-                client.newCall(request).execute().close()
+                http.newCall(request).execute().close()
             }
         }
         preferences.clearConnection()
     }
 
-    suspend fun searchTracks(query: String, limit: Int = 50): Result<List<PlayableTrack>> =
-        tracks(
-            "searchTerm" to query.trim(),
+    /** Direct-stream URL plus the header that authorizes it, or null when signed out.
+     *  The token travels only in the header, never in the URL. */
+    suspend fun streamRequest(itemId: String): Pair<String, Map<String, String>>? {
+        val conn = connection.first()
+        if (!conn.isConnected) return null
+        return "${conn.serverUrl}/Audio/$itemId/stream?static=true" to
+            mapOf("Authorization" to authorizationHeader(conn.accessToken))
+    }
+
+    /** Real `Content-Type` of the stream from one `HEAD` request, or null when unknown. */
+    suspend fun streamMimeType(itemId: String): String? = withContext(Dispatchers.IO) {
+        runCatching {
+            val (url, headers) = streamRequest(itemId) ?: return@runCatching null
+            val request = Request.Builder().url(url).head()
+                .apply { headers.forEach { (k, v) -> header(k, v) } }
+                .build()
+            http.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return@use null
+                response.header("Content-Type")?.substringBefore(';')?.trim()?.takeIf { it.startsWith("audio/") }
+            }
+        }.getOrNull()
+    }
+
+    suspend fun search(tab: SearchTab, query: String): Result<List<SearchResultItem>> {
+        val q = query.trim()
+        // ponytail: 50 results, page when libraries outgrow it
+        return when (tab) {
+            SearchTab.TRACKS -> items("Audio", "searchTerm" to q, "Limit" to "50", "SortBy" to "SortName") { item, conn ->
+                val track = item.toPlayableTrack(conn)
+                SearchResultItem(
+                    name = track.title,
+                    artist = track.artist,
+                    subtitle = track.album,
+                    artworkUrl = track.artworkUrl,
+                    entityId = ID_PREFIX + item.id,
+                    track = track,
+                )
+            }
+            SearchTab.ALBUMS -> items("MusicAlbum", "searchTerm" to q, "Limit" to "50", "SortBy" to "SortName") { item, conn ->
+                item.toResult(conn)
+            }
+            else -> Result.success(emptyList())
+        }
+    }
+
+    suspend fun albums(sortBy: String, descending: Boolean = false, limit: Int = 20): Result<List<SearchResultItem>> =
+        items(
+            "MusicAlbum",
+            "SortBy" to sortBy,
+            "SortOrder" to if (descending) "Descending" else "Ascending",
             "Limit" to limit.toString(),
-            "SortBy" to "SortName",
-        )
+        ) { item, conn -> item.toResult(conn) }
 
-    suspend fun albumTracks(albumId: String): Result<List<PlayableTrack>> =
-        tracks(
-            "ParentId" to albumId,
-            "SortBy" to "ParentIndexNumber,IndexNumber,SortName",
-        )
+    /** Album page for a `jellyfin:<albumId>` ref (the id without the prefix). */
+    suspend fun albumPage(ref: String, title: String, artist: String): Result<AlbumPageData> {
+        val server = connection.first().serverUrl
+        return items("Audio", "ParentId" to ref, "SortBy" to "ParentIndexNumber,IndexNumber,SortName") { item, conn ->
+            item to item.toPlayableTrack(conn)
+        }.map { rows ->
+            val head = rows.firstOrNull()
+            AlbumPageData(
+                title = title,
+                artist = head?.first?.albumArtist ?: artist,
+                browseId = ID_PREFIX + ref,
+                // empty album keeps a Jellyfin image URL so artwork never falls back to the name lookup
+                artworkUrl = head?.second?.artworkUrl ?: "$server/Items/$ref/Images/Primary?maxHeight=544",
+                releaseYear = head?.first?.productionYear?.toString(),
+                trackCountText = "${rows.size} tracks",
+                tracks = rows.map { it.second },
+            )
+        }
+    }
 
-    private suspend fun tracks(vararg params: Pair<String, String>): Result<List<PlayableTrack>> =
+    private suspend fun <T> items(
+        type: String?,
+        vararg params: Pair<String, String>,
+        path: String = "/Items",
+        map: (JellyfinItem, JellyfinConnection) -> T,
+    ): Result<List<T>> =
         withContext(Dispatchers.IO) {
             runCatching {
                 val conn = connection.first()
                 if (!conn.isConnected) throw JellyfinException("Connect a Jellyfin server in Settings first")
-                val url = "${conn.serverUrl}/Items".toHttpUrlOrNull()!!.newBuilder()
+                val url = "${conn.serverUrl}$path".toHttpUrlOrNull()!!.newBuilder()
                     .addQueryParameter("userId", conn.userId)
-                    .addQueryParameter("IncludeItemTypes", "Audio")
+                    .apply { if (type != null) addQueryParameter("IncludeItemTypes", type) }
                     .addQueryParameter("Recursive", "true")
                     .apply { params.forEach { (k, v) -> addQueryParameter(k, v) } }
                     .build()
@@ -104,7 +179,7 @@ class JellyfinClient @Inject constructor(
                     request,
                     unauthorizedMessage = "Jellyfin session expired. Sign in again in Settings.",
                 )
-                page.items.map { it.toPlayableTrack(conn) }
+                page.items.map { map(it, conn) }
             }
         }
 
@@ -120,7 +195,7 @@ class JellyfinClient @Inject constructor(
     }
 
     private inline fun <reified T> execute(request: Request, unauthorizedMessage: String): T =
-        client.newCall(request).execute().use { response ->
+        http.newCall(request).execute().use { response ->
             if (response.code == 401) throw JellyfinException(unauthorizedMessage)
             if (!response.isSuccessful) throw JellyfinException("Jellyfin server returned HTTP ${response.code}")
             val body = response.body?.string() ?: throw JellyfinException("Empty response from Jellyfin server")
@@ -130,6 +205,17 @@ class JellyfinClient @Inject constructor(
     companion object {
         private val JSON_MEDIA_TYPE = "application/json".toMediaType()
         private const val TICKS_PER_MS = 10_000L
+
+        /** Prefix of the token-free identity: `jellyfin:<itemId>`. */
+        const val ID_PREFIX = "jellyfin:"
+
+        /** Follows [ID_PREFIX] in a playlist browse id: `jellyfin:playlist:<id>`. */
+        const val PLAYLIST_REF = "playlist:"
+
+        /** The item id when [v] is a `jellyfin:` identity, otherwise null. */
+        fun itemIdOf(v: String?): String? = v?.takeIf { it.startsWith(ID_PREFIX) }?.removePrefix(ID_PREFIX)
+
+        fun isImageUrl(u: String?): Boolean = u?.contains("/Images/Primary") == true
 
         internal val json = Json {
             ignoreUnknownKeys = true
@@ -161,17 +247,29 @@ class JellyfinClient @Inject constructor(
                 else -> null // ExoPlayer sniffs the container
             }
 
+        /** Never null: an item without art gets the bare URL, which the server 404s,
+         *  so the UI shows its fallback icon instead of a name-based artwork lookup. */
+        internal fun JellyfinItem.imageUrl(conn: JellyfinConnection): String = when {
+            imageTags["Primary"] != null -> "${conn.serverUrl}/Items/$id/Images/Primary?maxHeight=544&tag=${imageTags["Primary"]}"
+            albumId != null && albumPrimaryImageTag != null -> "${conn.serverUrl}/Items/$albumId/Images/Primary?maxHeight=544&tag=$albumPrimaryImageTag"
+            else -> "${conn.serverUrl}/Items/$id/Images/Primary?maxHeight=544"
+        }
+
+        internal fun JellyfinItem.toResult(conn: JellyfinConnection, ref: String = ID_PREFIX + id): SearchResultItem =
+            SearchResultItem(
+                name = name,
+                artist = albumArtist,
+                subtitle = productionYear?.toString(),
+                artworkUrl = imageUrl(conn),
+                entityId = ref,
+            )
+
         internal fun JellyfinItem.toPlayableTrack(conn: JellyfinConnection): PlayableTrack {
-            val artwork = when {
-                imageTags["Primary"] != null -> "${conn.serverUrl}/Items/$id/Images/Primary?maxHeight=544&tag=${imageTags["Primary"]}"
-                albumId != null && albumPrimaryImageTag != null -> "${conn.serverUrl}/Items/$albumId/Images/Primary?maxHeight=544&tag=$albumPrimaryImageTag"
-                else -> null
-            }
             return PlayableTrack(
                 title = name,
                 artist = artists.joinToString(", ").ifBlank { albumArtist.orEmpty() }.ifBlank { "Unknown artist" },
                 album = album,
-                artworkUrl = artwork,
+                artworkUrl = imageUrl(conn),
                 // static=true serves the original file untouched: no server transcode.
                 playbackUrl = "${conn.serverUrl}/Audio/$id/stream?static=true&api_key=${conn.accessToken}",
                 playbackMimeType = mimeTypeForContainer(container),
@@ -216,4 +314,14 @@ internal data class JellyfinItem(
     @SerialName("Container") val container: String? = null,
     @SerialName("ImageTags") val imageTags: Map<String, String> = emptyMap(),
     @SerialName("AlbumPrimaryImageTag") val albumPrimaryImageTag: String? = null,
+    @SerialName("ProductionYear") val productionYear: Int? = null,
+    @SerialName("ChildCount") val childCount: Int? = null,
+    @SerialName("Type") val type: String? = null,
+    @SerialName("AlbumArtists") val albumArtists: List<NameId> = emptyList(),
+)
+
+@Serializable
+internal data class NameId(
+    @SerialName("Id") val id: String,
+    @SerialName("Name") val name: String = "",
 )

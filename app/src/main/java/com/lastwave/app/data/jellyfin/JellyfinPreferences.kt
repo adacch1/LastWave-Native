@@ -2,11 +2,13 @@ package com.lastwave.app.data.jellyfin
 
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import com.lastwave.app.data.local.readSafely
 import com.lastwave.app.data.local.recoverPreferences
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import java.util.UUID
@@ -46,6 +48,18 @@ class JellyfinPreferences @Inject constructor(
             )
         }
 
+    /** True when the app is in Jellyfin mode. Requires a session, so a restored
+     *  flag without a token reads false. Deduplicated because every write to the
+     *  shared store re-emits. */
+    val mode: Flow<Boolean> = dataStore.data
+        .recoverPreferences(TAG)
+        .map { it.readSafely(MODE_KEY) == true && !it.readSafely(ACCESS_TOKEN_KEY).isNullOrBlank() }
+        .distinctUntilChanged()
+
+    suspend fun setMode(on: Boolean) {
+        dataStore.edit { prefs -> prefs[MODE_KEY] = on }
+    }
+
     /** Stable per-install id. Jellyfin keys sessions by device, so a new id
      *  on every login would pile up stale devices on the server dashboard. */
     suspend fun deviceId(): String {
@@ -75,6 +89,7 @@ class JellyfinPreferences @Inject constructor(
             prefs.remove(USER_ID_KEY)
             prefs.remove(USER_NAME_KEY)
             prefs.remove(ACCESS_TOKEN_KEY)
+            prefs.remove(MODE_KEY)
         }
     }
 
@@ -85,5 +100,6 @@ class JellyfinPreferences @Inject constructor(
         val USER_NAME_KEY = stringPreferencesKey("jellyfin_user_name")
         val ACCESS_TOKEN_KEY = stringPreferencesKey("jellyfin_access_token")
         val DEVICE_ID_KEY = stringPreferencesKey("jellyfin_device_id")
+        val MODE_KEY = booleanPreferencesKey("jellyfin_mode")
     }
 }

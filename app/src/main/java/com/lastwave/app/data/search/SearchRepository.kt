@@ -7,6 +7,7 @@ import com.lastwave.app.data.local.SessionPreferences
 import com.lastwave.app.data.music.InnerTubeMusicApi
 import com.lastwave.app.data.music.YouTubeMusicTrack
 import com.lastwave.app.data.network.LastFmApiService
+import com.lastwave.app.playback.PlayableTrack
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
 import kotlinx.serialization.json.Json
@@ -34,6 +35,7 @@ data class SearchResultItem(
     val subtitle: String? = null,
     val videoId: String? = null,
     val entityId: String? = null,
+    val track: PlayableTrack? = null,
 )
 
 /**
