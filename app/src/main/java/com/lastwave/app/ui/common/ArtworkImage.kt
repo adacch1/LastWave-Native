@@ -21,6 +21,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.lastwave.app.data.artwork.ArtworkNormalizer
+import com.lastwave.app.data.jellyfin.JellyfinClient
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 
@@ -61,6 +62,18 @@ fun ArtworkImage(
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
                 onError = { embeddedFailed = true },
+            )
+        }
+        return
+    }
+    // Jellyfin art never falls into the Last.fm, iTunes, Deezer, or YouTube lookup below.
+    if (JellyfinClient.isImageUrl(embeddedUrl)) {
+        Box(modifier = modifier, contentAlignment = Alignment.Center) {
+            Icon(
+                fallbackIcon,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                modifier = Modifier.fillMaxSize(0.42f),
             )
         }
         return

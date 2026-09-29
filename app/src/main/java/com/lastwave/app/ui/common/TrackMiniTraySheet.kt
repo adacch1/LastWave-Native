@@ -49,6 +49,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.lastwave.app.data.jellyfin.JellyfinClient
 import com.lastwave.app.playback.PlayableTrack
 import com.lastwave.app.ui.player.LocalAddToPlaylist
 import com.lastwave.app.ui.player.LocalMusicPlayer
@@ -76,8 +77,9 @@ data class TrackMiniTrayData(
     val videoId: String? = null,
     val sourceLabel: String = "LastWave",
     val onPlay: (() -> Unit)? = null,
+    val playable: PlayableTrack? = null,
 ) {
-    fun toPlayable(): PlayableTrack = PlayableTrack(
+    fun toPlayable(): PlayableTrack = playable ?: PlayableTrack(
         title = title,
         artist = artist,
         album = album,
@@ -189,6 +191,7 @@ fun TrackMiniTraySheet(
                 com.lastwave.app.data.download.TrackDownloadManager.makeDownloadKey(data.title, data.artist)
             }
             val isDownloading = activeDownloads[downloadKey]?.let { !it.isFinished } == true
+            val isJellyfin = JellyfinClient.itemIdOf(playable.playbackUrl) != null
 
             val rows = buildList<@Composable (GroupPosition) -> Unit> {
                 // 1. Play
@@ -207,8 +210,8 @@ fun TrackMiniTraySheet(
                         onDismiss()
                     }
                 }
-                // 4. Download (status-aware label, same tiers as the full sheet)
-                add { pos ->
+                // 4. Download (status-aware label, same tiers as the full sheet). Downloads resolve through YouTube, so Jellyfin tracks get no row.
+                if (!isJellyfin) add { pos ->
                     when {
                         isDownloaded -> {
                             MiniTrayRow(Icons.Filled.CheckCircle, "Downloaded", position = pos) {
@@ -246,7 +249,7 @@ fun TrackMiniTraySheet(
                     }
                 }
                 // 6. Go to album (only when we know the album)
-                if (!data.album.isNullOrBlank()) {
+                if (!isJellyfin && !data.album.isNullOrBlank()) {
                     add { pos ->
                         val album = data.album
                         MiniTrayRow(Icons.Filled.Album, "Go to album", position = pos) {
@@ -256,7 +259,7 @@ fun TrackMiniTraySheet(
                     }
                 }
                 // 7. Go to artist (one row per artist, like the full sheet)
-                for (art in splitArtists) {
+                for (art in if (isJellyfin) emptyList<String>() else splitArtists) {
                     add { pos ->
                         MiniTrayRow(Icons.Filled.Person, "Go to artist ($art)", position = pos) {
                             artistAlbumViewModel.openArtist(art)

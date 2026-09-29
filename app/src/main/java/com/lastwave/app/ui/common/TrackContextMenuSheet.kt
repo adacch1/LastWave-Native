@@ -454,13 +454,15 @@ fun TrackContextMenuSheet(
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             if (target is TrackMenuTarget.Track) {
-                StartMixCard {
+                val playable = playableTrack ?: PlayableTrack(title = target.name, artist = target.artist)
+                // Jellyfin tracks have no YouTube match, so the YouTube-only rows below stay hidden.
+                val isJellyfin = JellyfinClient.itemIdOf(playable.playbackUrl) != null
+                if (!isJellyfin) StartMixCard {
                     if (onStartMix != null) onStartMix(target.name, target.artist)
                     else startMixViewModel.startMix(target.name, target.artist, playableTrack?.videoId)
                     onDismiss()
                 }
 
-                val playable = playableTrack ?: PlayableTrack(title = target.name, artist = target.artist)
                 QuickActionsRow(
                     onPlay = {
                         onPlayInLastWave?.invoke() ?: musicPlayer.play(playable, sourceLabel = playbackSourceLabel)
@@ -487,7 +489,7 @@ fun TrackContextMenuSheet(
                     }
                     add { pos -> MenuActionRow(Icons.Filled.PlaylistAdd, "Add to playlist", position = pos) { addToPlaylist(playable); onDismiss() } }
                     val splitArtists = com.lastwave.app.util.ArtistHelper.splitArtists(t.artist)
-                    for (art in splitArtists) {
+                    for (art in if (isJellyfin) emptyList<String>() else splitArtists) {
                         add { pos ->
                             MenuActionRow(Icons.Filled.Person, "Go to Artist ($art)", position = pos) {
                                 artistAlbumViewModel.openArtist(art)
@@ -495,7 +497,7 @@ fun TrackContextMenuSheet(
                             }
                         }
                     }
-                    if (!playable.album.isNullOrBlank()) {
+                    if (!isJellyfin && !playable.album.isNullOrBlank()) {
                         add { pos ->
                             val primaryArt = splitArtists.firstOrNull() ?: t.artist
                             val album = playable.album
@@ -508,7 +510,7 @@ fun TrackContextMenuSheet(
                     }
                     val downloadKey = com.lastwave.app.data.download.TrackDownloadManager.makeDownloadKey(t.name, t.artist)
                     val isDownloading = activeDownloads[downloadKey]?.let { !it.isFinished } == true
-                    add { pos ->
+                    if (!isJellyfin) add { pos ->
                         when {
                             isDownloaded -> {
                                 MenuActionRow(Icons.Filled.CheckCircle, "Downloaded", position = pos) {
@@ -563,7 +565,7 @@ fun TrackContextMenuSheet(
                     if (capabilities.showCopyActions) {
                         add { pos -> MenuActionRow(Icons.Filled.ContentCopy, "Copy Song", position = pos) { clipboard.setText(AnnotatedString("${t.name} \u2014 ${t.artist}")); onDismiss() } }
                     }
-                    add { pos ->
+                    if (!isJellyfin) add { pos ->
                         MenuActionRow(Icons.Filled.Info, "Details & Audio Specs", position = pos) {
                             showDetailsSheet = true
                         }
